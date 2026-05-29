@@ -1,0 +1,96 @@
+version: '3.8'
+
+services:
+  # MySQL数据库
+  mysql:
+    image: mysql:8.0
+    container_name: veri-data-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: VeriData@2024
+      MYSQL_DATABASE: veri_data
+      TZ: Asia/Shanghai
+    ports:
+      - "3306:3306"
+    volumes:
+      - ./mysql/data:/var/lib/mysql
+      - ./mysql/init:/docker-entrypoint-initdb.d
+    networks:
+      - veri-data-network
+
+  # Redis缓存
+  redis:
+    image: redis:7-alpine
+    container_name: veri-data-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    networks:
+      - veri-data-network
+
+  # 后端API服务
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: veri-data-backend
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_USER: root
+      DB_PASSWORD: VeriData@2024
+      DB_NAME: veri_data
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      JWT_SECRET: VeriData_JWT_Secret_Key_2024_Secure
+      JWT_EXPIRES_IN: 7d
+      AI_SERVICE_URL: http://ai-service:5000
+      UPLOAD_PATH: /app/uploads
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./uploads:/app/uploads
+      - ./logs:/app/logs
+    depends_on:
+      - mysql
+      - redis
+    networks:
+      - veri-data-network
+
+  # AI检测服务
+  ai-service:
+    build:
+      context: ./ai-service
+      dockerfile: Dockerfile
+    container_name: veri-data-ai
+    restart: unless-stopped
+    environment:
+      FLASK_ENV: production
+      MODEL_PATH: /app/models
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./ai-service/models:/app/models
+      - ./logs:/app/logs
+    networks:
+      - veri-data-network
+
+  # 前端服务（使用Nginx）
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: veri-data-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - veri-data-network
+
+networks:
+  veri-data-network:
+    driver: bridge

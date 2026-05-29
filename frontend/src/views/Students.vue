@@ -1,0 +1,105 @@
+<template>
+  <div class="page-container">
+    <div class="page-header">
+      <h2 class="page-title">我的学生</h2>
+      <el-button type="primary" @click="showAddDialog = true">
+        <el-icon><Plus /></el-icon>
+        添加学生
+      </el-button>
+    </div>
+    
+    <el-card>
+      <el-table :data="students" v-loading="loading" style="width: 100%">
+        <el-table-column prop="username" label="用户名" min-width="120" />
+        <el-table-column prop="real_name" label="真实姓名" min-width="100" />
+        <el-table-column prop="status" label="状态" width="100">
+          <template #default="{ row }">
+            <el-tag :type="row.status === 'active' ? 'success' : 'warning'">
+              {{ row.status === 'active' ? '正常' : '待激活' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="added_at" label="添加时间" width="180">
+          <template #default="{ row }">
+            {{ formatDate(row.added_at) }}
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="150">
+          <template #default="{ row }">
+            <el-button link type="primary" @click="viewStudentData(row)">查看数据</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
+    
+    <!-- 添加学生对话框 -->
+    <el-dialog v-model="showAddDialog" title="添加学生" width="400px">
+      <el-form :model="addForm" label-width="80px">
+        <el-form-item label="学生账号">
+          <el-input v-model="addForm.student_username" placeholder="请输入学生用户名" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showAddDialog = false">取消</el-button>
+        <el-button type="primary" @click="addStudent">添加</el-button>
+      </template>
+    </el-dialog>
+  </div>
+</template>
+
+<script setup>
+import { ref, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
+import { Plus } from '@element-plus/icons-vue'
+import dayjs from 'dayjs'
+import { api } from '../store'
+
+const router = useRouter()
+const loading = ref(false)
+const students = ref([])
+const showAddDialog = ref(false)
+const addForm = ref({ student_username: '' })
+
+const formatDate = (date) => dayjs(date).format('YYYY-MM-DD HH:mm')
+
+const fetchStudents = async () => {
+  loading.value = true
+  try {
+    const response = await api.get('/users/my-students')
+    students.value = response.students
+  } catch (error) {
+    ElMessage.error('获取学生列表失败')
+  } finally {
+    loading.value = false
+  }
+}
+
+const addStudent = async () => {
+  if (!addForm.value.student_username) {
+    ElMessage.warning('请输入学生账号')
+    return
+  }
+  
+  try {
+    await api.post('/users/students', {
+      student_username: addForm.value.student_username
+    })
+    ElMessage.success('添加成功')
+    showAddDialog.value = false
+    addForm.value.student_username = ''
+    fetchStudents()
+  } catch (error) {
+    ElMessage.error(error.error || '添加失败')
+  }
+}
+
+const viewStudentData = (row) => {
+  // 跳转到数据列表，筛选该学生的数据
+  router.push('/data/list')
+}
+
+onMounted(() => {
+  fetchStudents()
+})
+</script>
