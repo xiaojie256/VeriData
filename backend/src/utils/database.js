@@ -10,7 +10,11 @@ const pool = mysql.createPool({
   connectionLimit: 10,
   queueLimit: 0,
   enableKeepAlive: true,
-  keepAliveInitialDelay: 0
+  keepAliveInitialDelay: 10000, // 每10秒发送一次TCP心跳包，阻止Docker或MySQL强制断连
+  
+  // 🟢 增加限制闲置生命周期，在MySQL超时前（通常很长），连接池主动回收
+  maxIdle: 10, // 最大闲置连接数
+  idleTimeout: 60000, // 闲置连接超过60秒自动释放重连
 });
 
 // 测试连接
