@@ -19,8 +19,8 @@ router.get('/pending', authenticate, authorize('teacher', 'expert', 'admin'), as
     if (req.user.role === 'teacher') {
       whereClause = 'AND d.submitter_id IN (SELECT student_id FROM teacher_student_relations WHERE teacher_id = ? AND status = "active")';
     } else if (req.user.role === 'expert') {
-      // 专家查看所有待盲审的数据
-      whereClause = 'AND r.reviewer_id IS NULL OR r.reviewer_id = ?';
+      // 专家查看所有待盲审的数据（只能查看未分配或分配给自己的）
+      whereClause = 'AND (r.reviewer_id IS NULL OR r.reviewer_id = ?)';
       params = [req.user.id];
     }
 

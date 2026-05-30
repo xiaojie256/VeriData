@@ -39,11 +39,11 @@ router.post('/register', [
     // 密码加密
     const passwordHash = await bcrypt.hash(password, 10);
 
-    // 创建用户
+    // 创建用户（确保没有 undefined 值）
     const [result] = await pool.execute(
       `INSERT INTO users (username, email, password_hash, real_name, role, phone, status, quota_total) 
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [username, email, passwordHash, real_name, role, phone, 
+      [username, email, passwordHash, real_name || null, role, phone || null, 
        role === 'civilian' ? 'active' : 'pending_verification', // 平民用户直接激活，其他需审核
        role === 'civilian' ? 5 : 10] // 平民用户初始配额5，其他10
     );
