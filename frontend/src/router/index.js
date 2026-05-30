@@ -47,7 +47,7 @@ const routes = [
         path: 'review/pending',
         name: 'ReviewPending',
         component: () => import('../views/review/Pending.vue'),
-        meta: { title: '待审核', icon: 'Check', roles: ['teacher', 'expert', 'admin'] }
+        meta: { title: '待审核', icon: 'Check', roles: ['teacher', 'expert', 'admin'] ,hidden:true}
       },
       {
         path: 'review/history',

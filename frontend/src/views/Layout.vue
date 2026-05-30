@@ -16,7 +16,7 @@
         active-text-color="#409EFF"
       >
         <template v-for="route in menuRoutes" :key="route.path">
-          <el-menu-item v-if="!route.children && !route.meta?.hidden" :index="route.path">
+          <el-menu-item v-if="!route.children && !route.meta?.hidden" :index="'/' + route.path">
             <el-icon><component :is="route.meta?.icon || 'Menu'" /></el-icon>
             <span>{{ route.meta?.title }}</span>
           </el-menu-item>
