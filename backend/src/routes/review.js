@@ -9,11 +9,14 @@ const router = express.Router();
 // 获取待审核列表
 router.get('/pending', authenticate, authorize('teacher', 'expert', 'admin'), async (req, res) => {
   try {
-    const { page = 1, limit = 10, review_type } = req.query;
-    const offset = (parseInt(page) - 1) * parseInt(limit);
+    const userId = req.user.id.toString();
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const { review_type } = req.query;
+    const offset = (page - 1) * limit;
 
     let whereClause = '';
-    let params = [req.user.id];
+    let params = [userId];
 
     // 导师只查看自己学生的数据
     if (req.user.role === 'teacher') {
@@ -21,7 +24,7 @@ router.get('/pending', authenticate, authorize('teacher', 'expert', 'admin'), as
     } else if (req.user.role === 'expert') {
       // 专家查看所有待盲审的数据（只能查看未分配或分配给自己的）
       whereClause = 'AND (r.reviewer_id IS NULL OR r.reviewer_id = ?)';
-      params = [req.user.id];
+      params = [userId];
     }
 
     const [reviews] = await pool.execute(
@@ -38,7 +41,7 @@ router.get('/pending', authenticate, authorize('teacher', 'expert', 'admin'), as
        ${whereClause}
        ORDER BY d.submitted_at ASC
        LIMIT ? OFFSET ?`,
-      [...params, ...(review_type ? [review_type] : []), parseInt(limit), offset]
+      [...params, ...(review_type ? [review_type] : []), limit, offset]
     );
 
     res.json({ reviews });
@@ -51,8 +54,15 @@ router.get('/pending', authenticate, authorize('teacher', 'expert', 'admin'), as
 // 获取审核历史
 router.get('/history', authenticate, async (req, res) => {
   try {
-    const { page = 1, limit = 10 } = req.query;
-    const offset = (parseInt(page) - 1) * parseInt(limit);
+    // 验证用户ID
+    if (!req.user || !req.user.id) {
+      return res.status(401).json({ error: '用户未认证' });
+    }
+    
+    const userId = req.user.id.toString();
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const offset = (page - 1) * limit;
 
     const [reviews] = await pool.execute(
       `SELECT r.id, r.data_id, r.review_type, r.status, r.overall_score, r.completed_at,
@@ -62,7 +72,7 @@ router.get('/history', authenticate, async (req, res) => {
        WHERE r.reviewer_id = ? AND r.status != 'pending'
        ORDER BY r.completed_at DESC
        LIMIT ? OFFSET ?`,
-      [req.user.id, parseInt(limit), offset]
+      [userId, limit, offset]
     );
 
     res.json({ reviews });

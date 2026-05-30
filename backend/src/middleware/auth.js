@@ -1,7 +1,12 @@
 const jwt = require('jsonwebtoken');
 const pool = require('../utils/database');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
+const JWT_SECRET = process.env.JWT_SECRET;
+
+// 确保JWT密钥已设置
+if (!JWT_SECRET) {
+  throw new Error('JWT_SECRET 环境变量未设置');
+}
 
 // 验证JWT令牌
 const authenticate = async (req, res, next) => {

@@ -77,11 +77,19 @@ router.get('/:id', authenticate, async (req, res) => {
 // 获取通知列表
 router.get('/notifications/list', authenticate, async (req, res) => {
   try {
-    const { page = 1, limit = 20, unread_only = false } = req.query;
-    const offset = (parseInt(page) - 1) * parseInt(limit);
+    // 验证用户ID
+    if (!req.user || !req.user.id) {
+      return res.status(401).json({ error: '用户未认证' });
+    }
+    
+    const userId = req.user.id.toString();
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const { unread_only = false } = req.query;
+    const offset = (page - 1) * limit;
 
     let whereClause = 'WHERE user_id = ?';
-    let params = [req.user.id];
+    let params = [userId];
 
     if (unread_only === 'true') {
       whereClause += ' AND is_read = 0';
@@ -92,13 +100,13 @@ router.get('/notifications/list', authenticate, async (req, res) => {
        FROM notifications ${whereClause}
        ORDER BY created_at DESC
        LIMIT ? OFFSET ?`,
-      [...params, parseInt(limit), offset]
+      [...params, limit, offset]
     );
 
     // 获取未读数量
     const [unreadCount] = await pool.execute(
       'SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0',
-      [req.user.id]
+      [userId]
     );
 
     res.json({ 

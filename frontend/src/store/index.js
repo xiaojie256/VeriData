@@ -83,16 +83,18 @@ export default createStore({
     // 登录
     async login({ commit }, credentials) {
       const response = await api.post('/auth/login', credentials)
-      commit('SET_TOKEN', response.token)
-      commit('SET_USER', response.user)
+      const data = response.data || response
+      commit('SET_TOKEN', data.token)
+      commit('SET_USER', data.user)
       return response
     },
     
     // 注册
     async register({ commit }, userData) {
       const response = await api.post('/auth/register', userData)
-      commit('SET_TOKEN', response.token)
-      commit('SET_USER', response.user)
+      const data = response.data || response
+      commit('SET_TOKEN', data.token)
+      commit('SET_USER', data.user)
       return response
     },
     

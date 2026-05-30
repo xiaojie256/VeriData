@@ -129,16 +129,25 @@ router.post('/upload', authenticate, authorize('student', 'teacher', 'admin', 'c
 // 获取我的数据列表
 router.get('/my', authenticate, async (req, res) => {
   try {
-    const { page = 1, limit = 10, status } = req.query;
-    const offset = (parseInt(page) - 1) * parseInt(limit);
+    // 验证用户ID
+    if (!req.user || !req.user.id) {
+      return res.status(401).json({ error: '用户未认证' });
+    }
+    
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const { status } = req.query;
+    const offset = (page - 1) * limit;
 
+    const userId = req.user.id.toString();
+    
     let query = `SELECT id, title, description, data_type, data_format, file_size, 
                         visibility, review_status, review_progress, ai_check_status, ai_check_score,
                         ai_anomaly_detected, version, citation_count, download_count,
                         created_at, submitted_at, completed_at
                  FROM data_submissions 
                  WHERE submitter_id = ? AND deleted_at IS NULL`;
-    let params = [req.user.id];
+    let params = [userId];
 
     if (status) {
       query += ' AND review_status = ?';
@@ -146,21 +155,21 @@ router.get('/my', authenticate, async (req, res) => {
     }
 
     query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
-    params.push(parseInt(limit), offset);
+    params.push(limit, offset);
 
     const [data] = await pool.execute(query, params);
 
     // 获取总数
     const [countResult] = await pool.execute(
       'SELECT COUNT(*) as total FROM data_submissions WHERE submitter_id = ? AND deleted_at IS NULL',
-      [req.user.id]
+      [req.user.id.toString()]
     );
 
     res.json({
       data,
       pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
+        page,
+        limit,
         total: countResult[0].total
       }
     });

@@ -257,7 +257,7 @@ router.post('/final-review/:id', authenticate, authorize('admin'), async (req, r
     await pool.execute(
       `INSERT INTO review_records (data_id, reviewer_id, review_type, status, comments, completed_at)
        VALUES (?, ?, 'admin', ?, ?, NOW())`,
-      [dataId, req.user.id, decision, comments]
+      [dataId, Number(req.user.id), decision, comments]
     );
 
     // 通知提交者
@@ -283,8 +283,15 @@ router.post('/final-review/:id', authenticate, authorize('admin'), async (req, r
 // 获取系统日志
 router.get('/logs', authenticate, authorize('admin'), async (req, res) => {
   try {
-    const { page = 1, limit = 50, action, start_date, end_date } = req.query;
-    const offset = (parseInt(page) - 1) * parseInt(limit);
+    // 验证用户ID
+    if (!req.user || !req.user.id) {
+      return res.status(401).json({ error: '用户未认证' });
+    }
+    
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50;
+    const { action, start_date, end_date } = req.query;
+    const offset = (page - 1) * limit;
 
     let whereClause = '';
     let params = [];
@@ -306,7 +313,7 @@ router.get('/logs', authenticate, authorize('admin'), async (req, res) => {
        WHERE 1=1 ${whereClause}
        ORDER BY l.created_at DESC
        LIMIT ? OFFSET ?`,
-      [...params, parseInt(limit), offset]
+      [...params, limit, offset]
     );
 
     res.json({ logs });

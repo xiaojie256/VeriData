@@ -6,10 +6,16 @@ const pool = require('../utils/database');
 const logger = require('../utils/logger');
 const { authenticate } = require('../middleware/auth');
 const { upload, handleUploadError } = require('../middleware/upload');
+const { UserDTO, ApiResponse } = require('../dto');
 
 const router = express.Router();
-const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
+const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
+
+// 确保JWT密钥已设置
+if (!JWT_SECRET) {
+  throw new Error('JWT_SECRET 环境变量未设置');
+}
 
 // 注册
 router.post('/register', [
@@ -53,17 +59,18 @@ router.post('/register', [
     // 生成JWT
     const token = jwt.sign({ userId: result.insertId }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
 
-    res.status(201).json({
-      message: '注册成功',
+    const newUser = {
+      id: result.insertId,
+      username,
+      email,
+      role,
+      real_name
+    };
+
+    res.status(201).json(ApiResponse.success({
       token,
-      user: {
-        id: result.insertId,
-        username,
-        email,
-        role,
-        real_name
-      }
-    });
+      user: UserDTO.toResponse(newUser)
+    }, '注册成功'));
   } catch (error) {
     logger.error('注册失败:', error);
     res.status(500).json({ error: '注册失败，请稍后重试' });
@@ -143,20 +150,10 @@ router.post('/login', [
 
     logger.info(`用户登录: ${user.username}`);
 
-    res.json({
-      message: '登录成功',
+    res.json(ApiResponse.success({
       token,
-      user: {
-        id: user.id,
-        username: user.username,
-        email: user.email,
-        role: user.role,
-        real_name: user.real_name,
-        avatar_url: user.avatar_url,
-        quota_total: user.quota_total,
-        quota_used: user.quota_used
-      }
-    });
+      user: UserDTO.toResponse(user)
+    }, '登录成功'));
   } catch (error) {
     logger.error('登录失败:', error);
     res.status(500).json({ error: '登录失败，请稍后重试' });
@@ -175,10 +172,10 @@ router.get('/me', authenticate, async (req, res) => {
     );
 
     if (users.length === 0) {
-      return res.status(404).json({ error: '用户不存在' });
+      return res.status(404).json(ApiResponse.error('用户不存在', 'USER_NOT_FOUND'));
     }
 
-    res.json({ user: users[0] });
+    res.json(ApiResponse.success(UserDTO.toResponse(users[0])));
   } catch (error) {
     logger.error('获取用户信息失败:', error);
     res.status(500).json({ error: '获取用户信息失败' });
