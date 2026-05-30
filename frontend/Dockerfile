@@ -1,6 +1,11 @@
 # 构建阶段
 FROM node:18-alpine as build-stage
 
+# 设置字符集环境变量
+ENV LANG=zh_CN.UTF-8
+ENV LANGUAGE=zh_CN:zh
+ENV LC_ALL=zh_CN.UTF-8
+
 WORKDIR /app
 
 COPY package*.json ./
