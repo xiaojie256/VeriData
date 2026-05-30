@@ -41,10 +41,25 @@ api.interceptors.response.use(
 
 export { api }
 
+// 安全地从localStorage解析用户数据
+const parseUserFromStorage = () => {
+  const userStr = localStorage.getItem('user')
+  if (!userStr || userStr === 'null' || userStr === 'undefined') {
+    return null
+  }
+  try {
+    return JSON.parse(userStr)
+  } catch (e) {
+    console.error('解析用户数据失败:', e)
+    localStorage.removeItem('user')
+    return null
+  }
+}
+
 export default createStore({
   state: {
-    user: JSON.parse(localStorage.getItem('user') || 'null'),
-    token: localStorage.getItem('token'),
+    user: parseUserFromStorage(),
+    token: localStorage.getItem('token') || null,
     notifications: [],
     unreadCount: 0
   },

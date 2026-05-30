@@ -126,10 +126,24 @@ const router = createRouter({
 
 // 路由守卫
 router.beforeEach((to, from, next) => {
-  // 从localStorage实时获取token（避免与响应拦截器状态不同步）
+  // 从localStorage实时获取token和用户信息（避免与store状态不同步）
   const token = localStorage.getItem('token')
   const isLoggedIn = !!token
-  const userRole = store.getters.userRole
+  
+  // 直接从localStorage获取用户角色，不依赖store getter
+  let userRole = null
+  try {
+    const userStr = localStorage.getItem('user')
+    if (userStr && userStr !== 'null' && userStr !== 'undefined') {
+      const user = JSON.parse(userStr)
+      userRole = user?.role || null
+    }
+  } catch (e) {
+    console.error('解析用户角色失败:', e)
+    // 解析失败时清除无效数据
+    localStorage.removeItem('user')
+    localStorage.removeItem('token')
+  }
   
   // 公开页面直接访问
   if (to.meta.public) {
@@ -145,7 +159,8 @@ router.beforeEach((to, from, next) => {
   }
   
   // 角色权限检查
-  if (to.meta.roles && !to.meta.roles.includes(userRole)) {
+  if (to.meta.roles && userRole && !to.meta.roles.includes(userRole)) {
+    console.warn(`角色权限不足: 需要 ${to.meta.roles}, 当前角色 ${userRole}`)
     return next('/dashboard')
   }
   
