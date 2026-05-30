@@ -29,7 +29,11 @@ api.interceptors.response.use(
   error => {
     if (error.response?.status === 401) {
       localStorage.removeItem('token')
-      window.location.href = '/login'
+      localStorage.removeItem('user')
+      // 避免重复跳转，只在当前不是登录页时跳转
+      if (!window.location.pathname.includes('/login')) {
+        window.location.replace('/login')
+      }
     }
     return Promise.reject(error.response?.data || error)
   }

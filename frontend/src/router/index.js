@@ -126,7 +126,9 @@ const router = createRouter({
 
 // 路由守卫
 router.beforeEach((to, from, next) => {
-  const isLoggedIn = store.getters.isLoggedIn
+  // 从localStorage实时获取token（避免与响应拦截器状态不同步）
+  const token = localStorage.getItem('token')
+  const isLoggedIn = !!token
   const userRole = store.getters.userRole
   
   // 公开页面直接访问

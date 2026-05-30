@@ -294,8 +294,15 @@ const fetchData = async () => {
       }
     }
   } catch (error) {
-    ElMessage.error('获取数据详情失败')
-    router.push('/data/list')
+    if (error?.error) {
+      ElMessage.error(error.error)
+    } else {
+      ElMessage.error('获取数据详情失败')
+    }
+    // 404或403时才跳转到列表页，401由响应拦截器处理
+    if (error?.error === '数据不存在' || error?.error === '无权查看此数据') {
+      router.push('/data/list')
+    }
   }
 }
 

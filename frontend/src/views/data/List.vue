@@ -240,7 +240,11 @@ const fetchData = async () => {
     dataList.value = response.data
     pagination.total = response.pagination.total
   } catch (error) {
-    ElMessage.error('获取数据失败')
+    if (error?.error) {
+      ElMessage.error(error.error)
+    } else {
+      ElMessage.error('获取数据失败')
+    }
   } finally {
     loading.value = false
   }
