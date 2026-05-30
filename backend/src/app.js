@@ -38,7 +38,8 @@ const generalLimiter = rateLimit({
   max: 100, // 100次请求
   message: { error: '请求过于频繁，请稍后再试' },
   standardHeaders: true,
-  legacyHeaders: false
+  legacyHeaders: false,
+  skip: (req) => req.path.startsWith('/health') // 健康检查跳过限流
 });
 
 // 严格限流（认证接口）
@@ -49,14 +50,10 @@ const authLimiter = rateLimit({
   message: { error: '登录尝试次数过多，请15分钟后再试' }
 });
 
-// 宽松限流（公开接口）
-const publicLimiter = rateLimit({
-  windowMs: 60 * 1000, // 1分钟
-  max: 30,
-  message: { error: '请求过于频繁' }
-});
-
-app.use(`${API_PREFIX}/`, generalLimiter);
+// 应用限流到所有API路由
+app.use('/api/', generalLimiter);
+// 登录接口特殊限流（同时应用到新旧版本）
+app.use('/api/auth/login', authLimiter);
 app.use(`${API_PREFIX}/auth/login`, authLimiter);
 
 // 日志
@@ -69,21 +66,22 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 // 静态文件
 app.use('/uploads', express.static(process.env.UPLOAD_PATH || './uploads'));
 
-// 路由（带版本前缀）
-app.use(`${API_PREFIX}/auth`, authRoutes);
-app.use(`${API_PREFIX}/users`, userRoutes);
-app.use(`${API_PREFIX}/data`, dataRoutes);
-app.use(`${API_PREFIX}/review`, reviewRoutes);
-app.use(`${API_PREFIX}/admin`, adminRoutes);
-app.use(`${API_PREFIX}/ai`, aiRoutes);
+// 路由注册 - 同时支持带版本前缀和不带版本前缀的API
+// 这样前端使用 /api/data 或 /api/v1/data 都能正常工作
+const registerRoutes = (prefix) => {
+  app.use(`${prefix}/auth`, authRoutes);
+  app.use(`${prefix}/users`, userRoutes);
+  app.use(`${prefix}/data`, dataRoutes);
+  app.use(`${prefix}/review`, reviewRoutes);
+  app.use(`${prefix}/admin`, adminRoutes);
+  app.use(`${prefix}/ai`, aiRoutes);
+};
 
-// 旧版本API兼容（保留，但建议迁移）
-app.use('/api/auth', authRoutes);
-app.use('/api/users', userRoutes);
-app.use('/api/data', dataRoutes);
-app.use('/api/review', reviewRoutes);
-app.use('/api/admin', adminRoutes);
-app.use('/api/ai', aiRoutes);
+// 注册标准 /api/ 路由（前端当前使用的路径）
+registerRoutes('/api');
+
+// 注册带版本前缀的路由（新版本API）
+registerRoutes(API_PREFIX);
 
 // 健康检查端点
 // 存活检查 - 轻量级，仅检查服务是否运行
@@ -192,6 +190,26 @@ app.use((err, req, res, next) => {
   });
 });
 
+// 请求日志中间件（用于调试404问题）
+app.use((req, res, next) => {
+  // 如果请求已经处理过，直接跳过
+  if (res.headersSent) {
+    return next();
+  }
+  
+  // 记录未匹配的请求
+  logger.warn(`404 Not Found: ${req.method} ${req.path}`, {
+    originalUrl: req.originalUrl,
+    baseUrl: req.baseUrl,
+    query: req.query,
+    headers: {
+      authorization: req.headers.authorization ? 'Bearer ***' : undefined,
+      'user-agent': req.headers['user-agent']
+    }
+  });
+  next();
+});
+
 // 404处理
 app.use((req, res) => {
   res.status(404).json({
@@ -199,7 +217,9 @@ app.use((req, res) => {
     error: {
       message: '接口不存在',
       code: 'NOT_FOUND',
-      path: req.path
+      path: req.path,
+      method: req.method,
+      hint: '请确认API路径正确，当前支持的API前缀: /api 或 ' + API_PREFIX
     },
     timestamp: new Date().toISOString()
   });
