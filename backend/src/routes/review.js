@@ -27,7 +27,7 @@ router.get('/pending', authenticate, authorize('teacher', 'expert', 'admin'), as
       params = [userId];
     }
 
-    const [reviews] = await pool.execute(
+    const [reviews] = await pool.query(
       `SELECT r.id as review_id, r.data_id, r.review_type, r.status, r.created_at as assigned_at,
               d.title, d.description, d.data_type, d.data_format, d.submitted_at,
               d.ai_check_status, d.ai_check_score, d.ai_anomaly_detected,
@@ -64,7 +64,7 @@ router.get('/history', authenticate, async (req, res) => {
     const limit = parseInt(req.query.limit) || 10;
     const offset = (page - 1) * limit;
 
-    const [reviews] = await pool.execute(
+    const [reviews] = await pool.query(
       `SELECT r.id, r.data_id, r.review_type, r.status, r.overall_score, r.completed_at,
               d.title, r.comments, r.ai_assisted
        FROM review_records r

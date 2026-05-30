@@ -87,7 +87,7 @@ router.get('/users', authenticate, authorize('admin'), async (req, res) => {
       params.push(`%${search}%`, `%${search}%`, `%${search}%`);
     }
 
-    const [users] = await pool.execute(
+    const [users] = await pool.query(
       `SELECT id, username, email, real_name, role, status, phone_verified, id_verified,
               quota_total, quota_used, last_login_at, created_at
        FROM users ${whereClause}
@@ -201,7 +201,7 @@ router.get('/data', authenticate, authorize('admin'), async (req, res) => {
       params.push(data_type);
     }
 
-    const [data] = await pool.execute(
+    const [data] = await pool.query(
       `SELECT d.*, u.username as submitter_name, u.real_name as submitter_real_name
        FROM data_submissions d
        JOIN users u ON d.submitter_id = u.id
@@ -306,7 +306,7 @@ router.get('/logs', authenticate, authorize('admin'), async (req, res) => {
       params.push(start_date, end_date);
     }
 
-    const [logs] = await pool.execute(
+    const [logs] = await pool.query(
       `SELECT l.*, u.username, u.real_name
        FROM access_logs l
        LEFT JOIN users u ON l.user_id = u.id

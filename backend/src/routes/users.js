@@ -30,7 +30,7 @@ router.get('/', authenticate, authorize('teacher', 'expert', 'admin'), async (re
       params.push(`%${search}%`, `%${search}%`);
     }
 
-    const [users] = await pool.execute(
+    const [users] = await pool.query(
       `SELECT id, username, real_name, avatar_url, role, status, created_at
        FROM users ${whereClause}
        ORDER BY created_at DESC
@@ -95,7 +95,7 @@ router.get('/notifications/list', authenticate, async (req, res) => {
       whereClause += ' AND is_read = 0';
     }
 
-    const [notifications] = await pool.execute(
+    const [notifications] = await pool.query(
       `SELECT id, type, title, content, is_read, related_type, related_id, created_at
        FROM notifications ${whereClause}
        ORDER BY created_at DESC

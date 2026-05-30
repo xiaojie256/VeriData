@@ -157,7 +157,7 @@ router.get('/my', authenticate, async (req, res) => {
     query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
     params.push(limit, offset);
 
-    const [data] = await pool.execute(query, params);
+    const [data] = await pool.query(query, params);
 
     // 获取总数
     const [countResult] = await pool.execute(
