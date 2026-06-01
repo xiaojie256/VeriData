@@ -272,8 +272,27 @@ const viewDetail = (id) => {
 
 const submitReview = async (row) => {
   currentData.value = row
+  
+  // 1. 安全提取当前登录用户的角色，避免盲目请求
+  let userRole = 'student';
   try {
-    // 获取导师列表
+    const user = JSON.parse(localStorage.getItem('user'));
+    userRole = user?.role || 'student';
+  } catch (e) {
+    console.error(e);
+  }
+
+  // 2. 如果不是学生（是教师、专家或管理员），跳过获取导师步骤，直接指派给系统默认审批人（ID 1 为系统内置管理员）
+  if (userRole !== 'student') {
+    submitForm.teacher_id = 1; 
+    submitForm.liability_accepted = false;
+    teachers.value = [{ id: 1, real_name: '系统审查员（管理员）' }];
+    submitDialogVisible.value = true;
+    return;
+  }
+
+  // 3. 学生角色维持原状，去请求属于自己的导师
+  try {
     const response = await api.get('/users/my-teacher')
     if (response.teachers) {
       teachers.value = [response.teachers]
