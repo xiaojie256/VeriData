@@ -36,18 +36,22 @@ api.interceptors.response.use(
       localStorage.removeItem('token')
       localStorage.removeItem('user')
       
-      if (!window.location.pathname.includes('/login')) {
+      // 新增：判断当前是否已经在登录页
+      const isAtLogin = window.location.pathname.includes('/login');
+      
+      if (!isAtLogin) {
         if (status === 403) {
-          // 使用原生的 alert 阻断后续 JS 执行，确保用户看清被封禁的原因
           alert('您的账号已被封禁，请联系管理员！');
         }
         // 强制重定向回登录页
         window.location.replace('/login')
+        
+        // 仅在非登录页的并发请求时，返回挂起的 Promise 拦截满屏红字
+        return new Promise(() => {});
       }
       
-      // 【核心黑科技】：返回一个既不 resolve 也不 reject 的 Promise
-      // 这样页面上其他并发请求的 .catch() 永远不会被触发，满屏的无用报错弹窗瞬间消失
-      return new Promise(() => {});
+      // 修改：如果本身就在登录页发起的登录，必须正常抛出错误，供登录组件捕获关闭转圈并报错
+      return Promise.reject(error.response?.data || error);
     }
 
     return Promise.reject(error.response?.data || error)
