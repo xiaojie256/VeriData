@@ -49,6 +49,7 @@
       
       <div class="login-footer">
         <el-link type="primary" @click="$router.push('/register')">还没有账号？立即注册</el-link>
+        <el-link type="info" style="margin-left: 20px;" @click="showResetDialog = true">忘记密码？</el-link>
       </div>
     </div>
     

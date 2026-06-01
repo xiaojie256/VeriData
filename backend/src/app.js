@@ -19,6 +19,7 @@ const logger = require('./utils/logger');
 const { performHealthCheck, performReadinessCheck, performLivenessCheck } = require('./utils/healthCheck');
 
 const app = express();
+app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
 
 // API版本前缀

@@ -21,6 +21,15 @@
           <el-input v-model="form.email" placeholder="邮箱" :prefix-icon="Message" />
         </el-form-item>
         
+        <el-form-item prop="code">
+          <div style="display: flex; gap: 10px; width: 100%;">
+            <el-input v-model="form.code" placeholder="6位验证码" />
+            <el-button :disabled="countdown > 0" @click="sendRegisterCode">
+              {{ countdown > 0 ? `${countdown}s 后重发` : '获取验证码' }}
+            </el-button>
+          </div>
+        </el-form-item>
+
         <el-form-item prop="real_name">
           <el-input v-model="form.real_name" placeholder="真实姓名" :prefix-icon="UserFilled" />
         </el-form-item>
@@ -57,11 +66,12 @@
 </template>
 
 <script setup>
-import { ref, reactive } from 'vue'
+import { ref, reactive, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useStore } from 'vuex'
 import { ElMessage } from 'element-plus'
 import { User, Lock, Message, UserFilled } from '@element-plus/icons-vue'
+import { api } from '@/store'
 
 const router = useRouter()
 const store = useStore()
@@ -71,10 +81,54 @@ const loading = ref(false)
 const form = reactive({
   username: '',
   email: '',
+  code: '',
   real_name: '',
   role: '',
   password: '',
   confirmPassword: ''
+})
+
+const countdown = ref(0)
+let timer = null
+
+const sendRegisterCode = async () => {
+  if (!form.email) {
+    ElMessage.warning('请先输入邮箱地址')
+    return
+  }
+  // 简单验证邮箱格式是否正确
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+  if (!emailRegex.test(form.email)) {
+    ElMessage.warning('请输入正确的邮箱格式')
+    return
+  }
+
+  try {
+    // 调用后端新写的发送验证码接口
+    await api.post('/auth/send-code', {
+      email: form.email,
+      type: 'register'
+    })
+    
+    ElMessage.success('验证码已发送，请注意查收')
+    
+    // 启动 60 秒倒计时
+    countdown.value = 60
+    timer = setInterval(() => {
+      countdown.value--
+      if (countdown.value <= 0) {
+        clearInterval(timer)
+      }
+    }, 1000)
+    
+  } catch (error) {
+    ElMessage.error(error.error || '验证码发送失败，请稍后重试')
+  }
+}
+
+// 组件销毁时清除定时器，防止内存泄漏
+onUnmounted(() => {
+  if (timer) clearInterval(timer)
 })
 
 const validatePass2 = (rule, value, callback) => {
