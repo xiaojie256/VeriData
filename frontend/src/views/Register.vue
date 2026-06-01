@@ -88,7 +88,9 @@ const validatePass2 = (rule, value, callback) => {
 const rules = {
   username: [
     { required: true, message: '请输入用户名', trigger: 'blur' },
-    { min: 3, max: 50, message: '长度在 3 到 50 个字符', trigger: 'blur' }
+    { min: 3, max: 50, message: '长度在 3 到 50 个字符', trigger: 'blur' },
+    // 新增：利用 pattern 属性加入正则校验，拦截非法字符
+    { pattern: /^[a-zA-Z0-9\u4e00-\u9fa5]+$/, message: '用户名只能由字母、数字与汉字组成', trigger: 'blur' }
   ],
   email: [
     { required: true, message: '请输入邮箱', trigger: 'blur' },
@@ -98,7 +100,9 @@ const rules = {
   role: [{ required: true, message: '请选择角色', trigger: 'change' }],
   password: [
     { required: true, message: '请输入密码', trigger: 'blur' },
-    { min: 6, message: '密码长度至少为6个字符', trigger: 'blur' }
+    { min: 6, message: '密码长度至少为6个字符', trigger: 'blur' },
+    // 新增：利用 pattern 属性要求密码必须包含字母和数字
+    { pattern: /^(?=.*[a-zA-Z])(?=.*\d)/, message: '密码必须同时包含字母与数字', trigger: 'blur' }
   ],
   confirmPassword: [
     { required: true, message: '请确认密码', trigger: 'blur' },

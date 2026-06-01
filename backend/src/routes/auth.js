@@ -19,9 +19,13 @@ if (!JWT_SECRET) {
 
 // 注册
 router.post('/register', [
-  body('username').isLength({ min: 3, max: 50 }).withMessage('用户名长度应为3-50个字符'),
+  body('username')
+    .isLength({ min: 3, max: 50 }).withMessage('用户名长度应为3-50个字符')
+    .matches(/^[a-zA-Z0-9\u4e00-\u9fa5]+$/).withMessage('用户名只能由字母、数字与汉字组成'),
   body('email').isEmail().withMessage('邮箱格式不正确'),
-  body('password').isLength({ min: 6 }).withMessage('密码长度至少为6个字符'),
+  body('password')
+    .isLength({ min: 6 }).withMessage('密码长度至少为6个字符')
+    .matches(/^(?=.*[a-zA-Z])(?=.*\d)/).withMessage('密码必须同时包含字母与数字'),
   body('role').optional().isIn(['student', 'teacher', 'expert', 'civilian']).withMessage('无效的角色类型')
 ], async (req, res) => {
   try {
@@ -32,16 +36,26 @@ router.post('/register', [
 
     const { username, email, password, real_name, role = 'civilian', phone } = req.body;
 
-    // 检查用户是否已存在
-    const [existingUsers] = await pool.execute(
-      'SELECT id FROM users WHERE username = ? OR email = ?',
-      [username, email]
+    // 1. 同名处理：单独检查用户名
+    const [existingUsername] = await pool.execute(
+      'SELECT id FROM users WHERE username = ? AND deleted_at IS NULL',
+      [username]
     );
 
-    if (existingUsers.length > 0) {
-      return res.status(409).json({ error: '用户名或邮箱已被注册' });
+    if (existingUsername.length > 0) {
+      return res.status(409).json({ error: '用户名已被注册' });
     }
 
+    // 2. 同邮箱处理：单独检查邮箱
+    const [existingEmail] = await pool.execute(
+      'SELECT id FROM users WHERE email = ? AND deleted_at IS NULL',
+      [email]
+    );
+
+    if (existingEmail.length > 0) {
+      return res.status(409).json({ error: '该邮箱已被注册' });
+    }
+    
     // 密码加密
     const passwordHash = await bcrypt.hash(password, 10);
 
