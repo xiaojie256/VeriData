@@ -5,6 +5,8 @@ const { authenticate, authorize } = require('../middleware/auth');
 
 const router = express.Router();
 
+// ==================== 1. 静态常量路由（优先匹配） ====================
+
 // 获取用户列表（仅限教师/专家查看）
 router.get('/', authenticate, authorize('teacher', 'expert', 'admin'), async (req, res) => {
   try {
@@ -42,35 +44,6 @@ router.get('/', authenticate, authorize('teacher', 'expert', 'admin'), async (re
   } catch (error) {
     logger.error('获取用户列表失败:', error);
     res.status(500).json({ error: '获取用户列表失败' });
-  }
-});
-
-// 获取用户详情
-router.get('/:id', authenticate, async (req, res) => {
-  try {
-    const userId = req.params.id;
-
-    // 只能查看自己或有权限查看的用户
-    if (userId != req.user.id && !['admin', 'teacher'].includes(req.user.role)) {
-      return res.status(403).json({ error: '无权查看此用户信息' });
-    }
-
-    const [users] = await pool.execute(
-      `SELECT id, username, real_name, avatar_url, role, status, 
-              email_verified, phone_verified, id_verified,
-              quota_total, quota_used, created_at, last_login_at
-       FROM users WHERE id = ? AND deleted_at IS NULL`,
-      [userId]
-    );
-
-    if (users.length === 0) {
-      return res.status(404).json({ error: '用户不存在' });
-    }
-
-    res.json({ user: users[0] });
-  } catch (error) {
-    logger.error('获取用户详情失败:', error);
-    res.status(500).json({ error: '获取用户详情失败' });
   }
 });
 
@@ -119,6 +92,66 @@ router.get('/notifications/list', authenticate, async (req, res) => {
   }
 });
 
+// 获取配额使用记录
+router.get('/quota-logs', authenticate, async (req, res) => {
+  try {
+    const [logs] = await pool.execute(
+      `SELECT action_type, quota_consumed, description, created_at
+       FROM quota_usage_logs 
+       WHERE user_id = ?
+       ORDER BY created_at DESC
+       LIMIT 50`,
+      [req.user.id]
+    );
+
+    res.json({ logs });
+  } catch (error) {
+    logger.error('获取配额记录失败:', error);
+    res.status(500).json({ error: '获取配额记录失败' });
+  }
+});
+
+// 获取我的学生列表（导师专享）
+router.get('/my-students', authenticate, authorize('teacher'), async (req, res) => {
+  try {
+    const [students] = await pool.execute(
+      `SELECT u.id, u.username, u.real_name, u.avatar_url, u.status, u.created_at,
+              tsr.status as relation_status, tsr.created_at as added_at
+       FROM users u
+       JOIN teacher_student_relations tsr ON u.id = tsr.student_id
+       WHERE tsr.teacher_id = ? AND u.deleted_at IS NULL
+       ORDER BY tsr.created_at DESC`,
+      [req.user.id]
+    );
+
+    res.json({ students });
+  } catch (error) {
+    logger.error('获取学生列表失败:', error);
+    res.status(500).json({ error: '获取学生列表失败' });
+  }
+});
+
+// 获取我的导师（学生专享）
+router.get('/my-teacher', authenticate, authorize('student'), async (req, res) => {
+  try {
+    const [teachers] = await pool.execute(
+      `SELECT u.id, u.username, u.real_name, u.avatar_url, u.email,
+              tsr.status as relation_status
+       FROM users u
+       JOIN teacher_student_relations tsr ON u.id = tsr.teacher_id
+       WHERE tsr.student_id = ? AND tsr.status = 'active' AND u.deleted_at IS NULL`,
+      [req.user.id]
+    );
+
+    res.json({ teachers: teachers[0] || null });
+  } catch (error) {
+    logger.error('获取导师信息失败:', error);
+    res.status(500).json({ error: '获取导师信息失败' });
+  }
+});
+
+// ==================== 2. 操作类 POST 路由 ====================
+
 // 标记通知已读
 router.post('/notifications/:id/read', authenticate, async (req, res) => {
   try {
@@ -146,25 +179,6 @@ router.post('/notifications/read-all', authenticate, async (req, res) => {
   } catch (error) {
     logger.error('标记所有通知失败:', error);
     res.status(500).json({ error: '操作失败' });
-  }
-});
-
-// 获取配额使用记录
-router.get('/quota-logs', authenticate, async (req, res) => {
-  try {
-    const [logs] = await pool.execute(
-      `SELECT action_type, quota_consumed, description, created_at
-       FROM quota_usage_logs 
-       WHERE user_id = ?
-       ORDER BY created_at DESC
-       LIMIT 50`,
-      [req.user.id]
-    );
-
-    res.json({ logs });
-  } catch (error) {
-    logger.error('获取配额记录失败:', error);
-    res.status(500).json({ error: '获取配额记录失败' });
   }
 });
 
@@ -214,42 +228,34 @@ router.post('/students', authenticate, authorize('teacher'), async (req, res) =>
   }
 });
 
-// 获取我的学生列表（导师）
-router.get('/my-students', authenticate, authorize('teacher'), async (req, res) => {
+// ==================== 3. 动态拦截路由（垫底） ====================
+
+// 获取用户详情
+router.get('/:id', authenticate, async (req, res) => {
   try {
-    const [students] = await pool.execute(
-      `SELECT u.id, u.username, u.real_name, u.avatar_url, u.status, u.created_at,
-              tsr.status as relation_status, tsr.created_at as added_at
-       FROM users u
-       JOIN teacher_student_relations tsr ON u.id = tsr.student_id
-       WHERE tsr.teacher_id = ? AND u.deleted_at IS NULL
-       ORDER BY tsr.created_at DESC`,
-      [req.user.id]
+    const userId = req.params.id;
+
+    // 只能查看自己或有权限查看的用户
+    if (userId != req.user.id && !['admin', 'teacher'].includes(req.user.role)) {
+      return res.status(403).json({ error: '无权查看此用户信息' });
+    }
+
+    const [users] = await pool.execute(
+      `SELECT id, username, real_name, avatar_url, role, status, 
+              email_verified, phone_verified, id_verified,
+              quota_total, quota_used, created_at, last_login_at
+       FROM users WHERE id = ? AND deleted_at IS NULL`,
+      [userId]
     );
 
-    res.json({ students });
-  } catch (error) {
-    logger.error('获取学生列表失败:', error);
-    res.status(500).json({ error: '获取学生列表失败' });
-  }
-});
+    if (users.length === 0) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
 
-// 获取我的导师（学生）
-router.get('/my-teacher', authenticate, authorize('student'), async (req, res) => {
-  try {
-    const [teachers] = await pool.execute(
-      `SELECT u.id, u.username, u.real_name, u.avatar_url, u.email,
-              tsr.status as relation_status
-       FROM users u
-       JOIN teacher_student_relations tsr ON u.id = tsr.teacher_id
-       WHERE tsr.student_id = ? AND tsr.status = 'active' AND u.deleted_at IS NULL`,
-      [req.user.id]
-    );
-
-    res.json({ teachers: teachers[0] || null });
+    res.json({ user: users[0] });
   } catch (error) {
-    logger.error('获取导师信息失败:', error);
-    res.status(500).json({ error: '获取导师信息失败' });
+    logger.error('获取用户详情失败:', error);
+    res.status(500).json({ error: '获取用户详情失败' });
   }
 });
 
