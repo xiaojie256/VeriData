@@ -27,14 +27,29 @@ api.interceptors.request.use(
 api.interceptors.response.use(
   response => response.data,
   error => {
-    if (error.response?.status === 401) {
+    const status = error.response?.status;
+    const errorMsg = error.response?.data?.error;
+
+    // 1. 如果是 401 未登录，或者 403 且后端明确返回账号被封禁
+    if (status === 401 || (status === 403 && errorMsg === '账号已被封禁')) {
+      // 清除本地过期的无用凭证
       localStorage.removeItem('token')
       localStorage.removeItem('user')
-      // 避免重复跳转，只在当前不是登录页时跳转
+      
       if (!window.location.pathname.includes('/login')) {
+        if (status === 403) {
+          // 使用原生的 alert 阻断后续 JS 执行，确保用户看清被封禁的原因
+          alert('您的账号已被封禁，请联系管理员！');
+        }
+        // 强制重定向回登录页
         window.location.replace('/login')
       }
+      
+      // 【核心黑科技】：返回一个既不 resolve 也不 reject 的 Promise
+      // 这样页面上其他并发请求的 .catch() 永远不会被触发，满屏的无用报错弹窗瞬间消失
+      return new Promise(() => {});
     }
+
     return Promise.reject(error.response?.data || error)
   }
 )

@@ -77,7 +77,8 @@
           <template #default="{ row }">
             <el-button link type="primary" @click="editUser(row)">编辑</el-button>
             <el-button v-if="row.status === 'pending_verification'" link type="success" @click="verifyUser(row)">审核</el-button>
-            <el-button link type="danger" @click="suspendUser(row)">封禁</el-button>
+            <el-button v-if="row.status === 'active'" link type="danger" @click="suspendUser(row)">封禁</el-button>
+            <el-button v-if="row.status === 'suspended'" link type="success" @click="activateUser(row)">解封</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -268,6 +269,23 @@ const suspendUser = (row) => {
     try {
       await api.post(`/admin/users/${row.id}/verify`, { status: 'suspended' })
       ElMessage.success('已封禁')
+      fetchData()
+    } catch (error) {
+      ElMessage.error('操作失败')
+    }
+  })
+}
+
+const activateUser = (row) => {
+  ElMessageBox.confirm(`确定要解封用户 ${row.username} 吗？`, '确认解封', {
+    confirmButtonText: '解封',
+    cancelButtonText: '取消',
+    type: 'success'
+  }).then(async () => {
+    try {
+      // 同样调用 verify 接口，将状态改回 active
+      await api.post(`/admin/users/${row.id}/verify`, { status: 'active' })
+      ElMessage.success('账号解封成功')
       fetchData()
     } catch (error) {
       ElMessage.error('操作失败')
