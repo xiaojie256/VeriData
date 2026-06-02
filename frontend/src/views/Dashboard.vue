@@ -215,6 +215,10 @@ const viewData = (id) => {
 const fetchData = async () => {
   loading.value = true
   try {
+    // 同步用户配额信息
+    const userProfile = await api.get('/user/profile')
+    store.commit('setUser', userProfile.user)
+
     // 获取最近数据
     const response = await api.get('/data/my?page=1&limit=5')
     recentData.value = response.data

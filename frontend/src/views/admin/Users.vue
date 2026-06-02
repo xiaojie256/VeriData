@@ -73,12 +73,13 @@
           </template>
         </el-table-column>
         
-        <el-table-column label="操作" width="200" fixed="right">
+        <el-table-column label="操作" width="260" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="editUser(row)">编辑</el-button>
             <el-button v-if="row.status === 'pending_verification'" link type="success" @click="verifyUser(row)">审核</el-button>
             <el-button v-if="row.status === 'active'" link type="danger" @click="suspendUser(row)">封禁</el-button>
             <el-button v-if="row.status === 'suspended'" link type="success" @click="activateUser(row)">解封</el-button>
+            <el-button link type="danger" @click="deleteUser(row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -216,6 +217,57 @@ const resetFilters = () => {
   fetchData()
 }
 
+// 激活弹框编辑赋初值
+const editUser = (row) => {
+  editDialogVisible.value = true
+  editForm.id = row.id
+  editForm.username = row.username
+  editForm.real_name = row.real_name
+  editForm.email = row.email
+  editForm.role = row.role
+  editForm.quota_total = row.quota_total
+}
+
+// 执行保存修改与提权操作
+const saveUser = async () => {
+  try {
+    // 调用已经增强健壮性的 PUT 通用更新路由
+    await api.put(`/admin/users/${editForm.id}`, {
+      username: editForm.username,
+      real_name: editForm.real_name,
+      email: editForm.email,
+      role: editForm.role,         // 下拉选择实现角色一键提权变更
+      quota_total: editForm.quota_total // 数字输入框实现额度精准更改
+    })
+    ElMessage.success('用户信息保存与权限应用成功')
+    editDialogVisible.value = false
+    fetchData() // 刷新列表查看最新修改数据
+  } catch (error) {
+    ElMessage.error(error.error || '保存用户信息失败')
+  }
+}
+
+// 执行高危保底软删除动作
+const deleteUser = (row) => {
+  ElMessageBox.confirm(
+    `警示：确定要软删除用户 "${row.real_name || row.username}" 吗？该操作将阻断其登录状态并封存历史数据！`,
+    '高危管理行为警告',
+    {
+      confirmButtonText: '确定删除',
+      cancelButtonText: '取消',
+      type: 'warning'
+    }
+  ).then(async () => {
+    try {
+      await api.delete(`/admin/users/${row.id}`)
+      ElMessage.success('用户已成功执行软删除封存')
+      fetchData()
+    } catch (error) {
+      ElMessage.error(error.error || '删除用户失败')
+    }
+  }).catch(() => {})
+}
+
 const handleSizeChange = (size) => {
   pagination.limit = size
   fetchData()
@@ -226,23 +278,6 @@ const handlePageChange = (page) => {
   fetchData()
 }
 
-const editUser = (row) => {
-  Object.assign(editForm, row)
-  editDialogVisible.value = true
-}
-
-const saveUser = async () => {
-  try {
-    await api.post(`/admin/users/${editForm.id}/quota`, {
-      quota_total: editForm.quota_total
-    })
-    ElMessage.success('保存成功')
-    editDialogVisible.value = false
-    fetchData()
-  } catch (error) {
-    ElMessage.error('保存失败')
-  }
-}
 
 const verifyUser = async (row) => {
   try {
