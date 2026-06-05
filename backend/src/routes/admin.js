@@ -146,6 +146,11 @@ router.post(
         userId,
       ]);
 
+      // 审核通过时同步标记身份验证状态
+      if (status === "active") {
+        await pool.execute("UPDATE users SET id_verified = 1 WHERE id = ?", [userId]);
+      }
+
       // 动态推断通知标题与具体通知文本内容
       let title = "身份验证未通过";
       let content = `您的身份验证未通过，原因：${reason || "资料不完整"}`;
@@ -236,6 +241,13 @@ router.get("/data", authenticate, authorize("admin"), async (req, res) => {
     if (data_type) {
       whereClause += " AND d.data_type = ?";
       params.push(data_type);
+    }
+
+    // 支持管理员输入 标题 / 提交者账号 / 真实姓名 进行模糊搜索
+    const { search } = req.query;
+    if (search) {
+      whereClause += " AND (d.title LIKE ? OR u.username LIKE ? OR u.real_name LIKE ?)";
+      params.push(`%${search}%`, `%${search}%`, `%${search}%`);
     }
 
     const [data] = await pool.query(
@@ -390,13 +402,22 @@ router.delete(
     try {
       const targetUserId = req.params.id;
 
-      // 1. 拦截最高管理员自毁风险
+      // 强校验：防止因前端未传参引入恶意或无效路径标识
+      if (
+        !targetUserId ||
+        isNaN(Number(targetUserId)) ||
+        targetUserId === "undefined"
+      ) {
+        return res.status(400).json({ error: "无效的用户ID参数" });
+      }
+
+      // 1. 拦截最高管理员自毁风险（引入未删除限制条件）
       const [targetUser] = await pool.execute(
-        "SELECT role FROM users WHERE id = ?",
+        "SELECT role FROM users WHERE id = ? AND deleted_at IS NULL",
         [targetUserId],
       );
       if (targetUser.length === 0) {
-        return res.status(404).json({ error: "目标用户不存在" });
+        return res.status(404).json({ error: "目标用户不存在或已被软删除" });
       }
 
       if (targetUser[0].role === "admin") {
@@ -459,23 +480,66 @@ router.put("/users/:id", authenticate, authorize("admin"), async (req, res) => {
         ? dataSource.quota_total
         : dataSource.quotaTotal;
 
-    // 验证目标用户是否存在
+    // 验证目标用户是否存在并拉取其当前角色信息
     const [targetUser] = await pool.execute(
-      "SELECT id FROM users WHERE id = ? AND deleted_at IS NULL",
+      "SELECT id, role FROM users WHERE id = ? AND deleted_at IS NULL",
       [targetUserId],
     );
     if (targetUser.length === 0) {
       return res.status(404).json({ error: "用户不存在" });
     }
+    const currentRole = targetUser[0].role;
 
-    // 1. 精准执行唯一性约束核验
-    if (username) {
+    // 1. 精准执行唯一性约束与用户名合法性核验
+    if (username !== undefined) {
+      // 增加长度限制防御
+      if (username.length < 3 || username.length > 50) {
+        return res
+          .status(400)
+          .json({ error: "用户名长度必须在 3 到 50 个字符之间" });
+      }
+      // 增加字符合法性正则校验，拦截恶意注入或非法特殊字符
+      const usernameRegex = /^[a-zA-Z0-9\u4e00-\u9fa5]+$/;
+      if (!usernameRegex.test(username)) {
+        return res
+          .status(400)
+          .json({ error: "用户名只能由字母、数字与汉字组成" });
+      }
+
       const [dupUser] = await pool.execute(
         "SELECT id FROM users WHERE username = ? AND id != ? AND deleted_at IS NULL",
         [username, targetUserId],
       );
-      if (dupUser.length > 0)
+      if (dupUser.length > 0) {
         return res.status(409).json({ error: "用户名已存在" });
+      }
+    }
+
+    // 2. 提权角色合法性核验与末位管理员降级风险拦截
+    if (role !== undefined) {
+      const allowedRoles = [
+        "student",
+        "teacher",
+        "expert",
+        "admin",
+        "civilian",
+      ];
+      if (!allowedRoles.includes(role)) {
+        return res.status(400).json({ error: "无效的变更目标角色类型" });
+      }
+
+      // 如果当前被修改用户为管理员，但试图将其变更为非管理员角色（触发降级）
+      if (currentRole === "admin" && role !== "admin") {
+        const [adminCount] = await pool.execute(
+          "SELECT COUNT(*) as count FROM users WHERE role = 'admin' AND deleted_at IS NULL",
+        );
+        if (adminCount[0].count <= 1) {
+          return res.status(403).json({
+            error:
+              "安全拦截：该用户是系统中唯一的活跃管理员，禁止将其降级或更改角色",
+          });
+        }
+      }
     }
 
     if (email) {

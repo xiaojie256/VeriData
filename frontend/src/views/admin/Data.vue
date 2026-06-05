@@ -6,16 +6,32 @@
     
     <el-card class="filter-card">
       <el-form :model="filters" inline>
+        <el-form-item label="搜索">
+          <el-input v-model="filters.search" placeholder="请输入标题/提交者" clearable style="width: 200px;" />
+        </el-form-item>
         <el-form-item label="状态">
-          <el-select v-model="filters.status" placeholder="全部状态" clearable>
+          <el-select v-model="filters.status" placeholder="全部状态" clearable style="width: 150px;">
             <el-option label="草稿" value="draft" />
-            <el-option label="待审核" value="submitted" />
+            <el-option label="已提交" value="submitted" />
+            <el-option label="导师审核中" value="teacher_reviewing" />
+            <el-option label="导师通过" value="teacher_approved" />
+            <el-option label="导师拒绝" value="teacher_rejected" />
+            <el-option label="专家审核中" value="expert_reviewing" />
+            <el-option label="待终审" value="expert_approved" />
             <el-option label="已通过" value="final_approved" />
             <el-option label="已拒绝" value="final_rejected" />
           </el-select>
         </el-form-item>
+        <el-form-item label="数据类型">
+          <el-select v-model="filters.data_type" placeholder="全部类型" clearable style="width: 150px;">
+            <el-option label="原始数据" value="raw" />
+            <el-option label="处理数据" value="processed" />
+            <el-option label="分析结果" value="analysis" />
+            <el-option label="总结报告" value="summary" />
+          </el-select>
+        </el-form-item>
         <el-form-item>
-          <el-button type="primary" @click="fetchData">查询</el-button>
+          <el-button type="primary" @click="handleSearch">查询</el-button>
           <el-button @click="resetFilters">重置</el-button>
         </el-form-item>
       </el-form>
@@ -108,7 +124,9 @@ const reviewForm = reactive({
 })
 
 const filters = reactive({
-  status: ''
+  status: '',
+  data_type: '',
+  search: ''
 })
 
 const pagination = reactive({
@@ -155,7 +173,9 @@ const fetchData = async () => {
   try {
     let url = `/admin/data?page=${pagination.page}&limit=${pagination.limit}`
     if (filters.status) url += `&status=${filters.status}`
-    
+    if (filters.data_type) url += `&data_type=${filters.data_type}`
+    if (filters.search) url += `&search=${encodeURIComponent(filters.search)}`
+
     const response = await api.get(url)
     dataList.value = response.data
     pagination.total = response.pagination.total
@@ -166,8 +186,16 @@ const fetchData = async () => {
   }
 }
 
+const handleSearch = () => {
+  pagination.page = 1
+  fetchData()
+}
+
 const resetFilters = () => {
   filters.status = ''
+  filters.data_type = ''
+  filters.search = ''
+  pagination.page = 1
   fetchData()
 }
 
