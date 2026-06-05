@@ -354,14 +354,27 @@ router.get("/logs", authenticate, authorize("admin"), async (req, res) => {
     let params = [];
 
     if (action) {
-      whereClause += " AND action = ?";
+      whereClause += " AND l.action = ?";
       params.push(action);
     }
 
     if (start_date && end_date) {
-      whereClause += " AND created_at BETWEEN ? AND ?";
+      whereClause += " AND l.created_at BETWEEN ? AND ?";
       params.push(start_date, end_date);
     }
+
+    // 支持按用户名/真实姓名/IP地址进行模糊检索
+    const { search } = req.query;
+    if (search) {
+      whereClause += " AND (u.username LIKE ? OR u.real_name LIKE ? OR l.ip_address LIKE ?)";
+      params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+    }
+
+    // 计算满足当前筛选条件的日志总记录数
+    const [countResult] = await pool.execute(
+      `SELECT COUNT(*) as total FROM access_logs l LEFT JOIN users u ON l.user_id = u.id WHERE 1=1 ${whereClause}`,
+      params,
+    );
 
     const [logs] = await pool.query(
       `SELECT l.*, u.username, u.real_name
@@ -373,7 +386,14 @@ router.get("/logs", authenticate, authorize("admin"), async (req, res) => {
       [...params, limit, offset],
     );
 
-    res.json({ logs });
+    res.json({
+      logs,
+      pagination: {
+        page,
+        limit,
+        total: countResult[0].total,
+      },
+    });
   } catch (error) {
     logger.error("获取日志失败:", error);
     res.status(500).json({ error: "获取日志失败" });

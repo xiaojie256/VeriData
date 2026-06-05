@@ -6,8 +6,11 @@
     
     <el-card class="filter-card">
       <el-form :model="filters" inline>
+        <el-form-item label="搜索">
+          <el-input v-model="filters.search" placeholder="用户名/姓名/IP" clearable style="width: 180px;" />
+        </el-form-item>
         <el-form-item label="操作类型">
-          <el-select v-model="filters.action" placeholder="全部" clearable>
+          <el-select v-model="filters.action" placeholder="全部" clearable style="width: 130px;">
             <el-option label="登录" value="login" />
             <el-option label="查看" value="view" />
             <el-option label="下载" value="download" />
@@ -15,8 +18,18 @@
             <el-option label="审核" value="review" />
           </el-select>
         </el-form-item>
+        <el-form-item label="时间范围">
+          <el-date-picker
+            v-model="filters.dateRange"
+            type="datetimerange"
+            range-separator="至"
+            start-placeholder="开始时间"
+            end-placeholder="结束时间"
+            value-format="YYYY-MM-DD HH:mm:ss"
+          />
+        </el-form-item>
         <el-form-item>
-          <el-button type="primary" @click="fetchLogs">查询</el-button>
+          <el-button type="primary" @click="handleSearch">查询</el-button>
           <el-button @click="resetFilters">重置</el-button>
         </el-form-item>
       </el-form>
@@ -67,7 +80,9 @@ const loading = ref(false)
 const logs = ref([])
 
 const filters = reactive({
-  action: ''
+  action: '',
+  search: '',
+  dateRange: null
 })
 
 const pagination = reactive({
@@ -94,10 +109,15 @@ const fetchLogs = async () => {
   try {
     let url = `/admin/logs?page=${pagination.page}&limit=${pagination.limit}`
     if (filters.action) url += `&action=${filters.action}`
-    
+    if (filters.search) url += `&search=${encodeURIComponent(filters.search)}`
+
+    if (filters.dateRange && filters.dateRange.length === 2) {
+      url += `&start_date=${filters.dateRange[0]}&end_date=${filters.dateRange[1]}`
+    }
+
     const response = await api.get(url)
     logs.value = response.logs
-    pagination.total = response.logs.length
+    pagination.total = response.pagination.total
   } catch (error) {
     ElMessage.error('获取日志失败')
   } finally {
@@ -105,8 +125,16 @@ const fetchLogs = async () => {
   }
 }
 
+const handleSearch = () => {
+  pagination.page = 1
+  fetchLogs()
+}
+
 const resetFilters = () => {
   filters.action = ''
+  filters.search = ''
+  filters.dateRange = null
+  pagination.page = 1
   fetchLogs()
 }
 
