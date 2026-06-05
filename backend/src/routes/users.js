@@ -475,7 +475,7 @@ router.get("/pending-teachers", authenticate, async (req, res) => {
        FROM teacher_student_relations tsr
        JOIN users u ON tsr.teacher_id = u.id
        WHERE tsr.student_id = ? AND tsr.status = 'pending' AND u.deleted_at IS NULL`,
-      [req.user.id]
+      [req.user.id],
     );
     res.json({ invitations });
   } catch (error) {
@@ -492,7 +492,7 @@ router.delete("/relations/:relationId", authenticate, async (req, res) => {
 
     const [relations] = await pool.execute(
       "SELECT * FROM teacher_student_relations WHERE id = ?",
-      [relationId]
+      [relationId],
     );
 
     if (relations.length === 0) {
@@ -506,10 +506,15 @@ router.delete("/relations/:relationId", authenticate, async (req, res) => {
       return res.status(403).json({ error: "越权访问：无权操作此关联关系" });
     }
 
-    await pool.execute("DELETE FROM teacher_student_relations WHERE id = ?", [relationId]);
-    
+    await pool.execute("DELETE FROM teacher_student_relations WHERE id = ?", [
+      relationId,
+    ]);
+
     logger.info(`师生防线数据解除: id=${relationId}, 操作者=${userId}`);
-    res.json({ message: relation.status === 'pending' ? "申请已成功撤回" : "师生绑定关系已解除" });
+    res.json({
+      message:
+        relation.status === "pending" ? "申请已成功撤回" : "师生绑定关系已解除",
+    });
   } catch (error) {
     logger.error("操作师生关系链失败:", error);
     res.status(500).json({ error: "服务器内部异常" });
