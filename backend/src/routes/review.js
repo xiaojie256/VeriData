@@ -367,10 +367,15 @@ router.get(
         return res.status(404).json({ error: "数据不存在" });
       }
 
+      // 🔴 核心修复：执行反序列化对齐前端命名空间，并追加大模型智能意见字段
+      const rawResult = dataList[0].ai_check_result
+        ? JSON.parse(dataList[0].ai_check_result)
+        : {};
       res.json({
-        ai_analysis: dataList[0].ai_check_result,
-        ai_score: dataList[0].ai_check_score,
-        has_anomaly: dataList[0].ai_anomaly_detected,
+        score: dataList[0].ai_check_score,
+        has_anomaly: dataList[0].ai_anomaly_detected === 1,
+        anomalies: rawResult.anomaly_detection?.anomalies || [],
+        llm_insight: rawResult.llm_insight || "该数据集尚无大模型审计报告。",
       });
     } catch (error) {
       logger.error("获取AI分析失败:", error);

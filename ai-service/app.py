@@ -5,6 +5,7 @@ from datetime import datetime
 from flask import Flask, request, jsonify
 import pandas as pd
 import numpy as np
+import requests  # 🔴 新增：用于将 Pandas 结构化中间体指标外包投喂给大模型
 
 # 配置日志
 logging.basicConfig(
@@ -63,6 +64,10 @@ class DataAnalyzer:
             # 计算综合评分
             score = self._calculate_score(analysis_result)
             has_anomaly = score < 60 or analysis_result['anomaly_detection']['has_anomaly']
+            
+            # 🔴 新增：级联小米大模型进行语义审计
+            llm_insight = self._get_llm_insight(analysis_result, score)
+            analysis_result['llm_insight'] = llm_insight
             
             return {
                 'score': score,
@@ -290,6 +295,78 @@ class DataAnalyzer:
             score -= len(analysis['consistency_check']['issues']) * 3
         
         return max(0, round(score, 1))
+    
+    def _get_llm_insight(self, analysis, score):
+        """通过大模型获取语义审计意见"""
+        try:
+            import os
+            api_base = os.environ.get('MIMO_API_BASE', 'https://api.xiaomimimo.com/v1')
+            api_key = os.environ.get('MIMO_API_KEY')
+            model = os.environ.get('MIMO_MODEL', 'mimo-v2.5-flash')
+            
+            if not api_key:
+                return "大模型密钥未配置，无法获取审计报告。"
+            
+            # 构建大模型提示词
+            anomaly_summary = "检测到的异常：" if analysis['anomaly_detection']['anomalies'] else "未发现明显异常"
+            for anomaly in analysis['anomaly_detection']['anomalies'][:3]:
+                anomaly_summary += f"\n  - {anomaly.get('description', anomaly.get('type'))}"
+            
+            prompt = f"""
+作为数据质量审计专家，请对以下数据分析结果进行语义审计和合规性评估：
+
+【数据基本信息】
+- 数据规模：{analysis['file_info']['rows']} 行 × {analysis['file_info']['columns']} 列
+- 自动化评分：{score}/100
+
+【质量指标】
+- 缺失值：{"无" if not any(v['percentage'] > 0 for v in analysis['data_quality']['missing_values'].values()) else "存在"}
+- 重复行数：{analysis['data_quality']['duplicate_rows']}
+- {anomaly_summary}
+
+【一致性问题】
+{len(analysis['consistency_check']['issues'])} 个问题已检出
+
+请提供：
+1. 数据质量总体评估
+2. 主要风险识别
+3. 合规性建议（对标数据治理最佳实践）
+4. 后续审核重点
+
+回复应简洁专业，字数控制在200字以内。
+            """
+            
+            # 调用大模型
+            response = requests.post(
+                f"{api_base}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": "你是专业的数据质量审计专家，具有丰富的数据治理经验。"},
+                        {"role": "user", "content": prompt}
+                    ],
+                    "temperature": 0.3,
+                    "max_tokens": 500
+                },
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                if 'choices' in result and len(result['choices']) > 0:
+                    return result['choices'][0]['message']['content']
+            
+            return f"大模型调用失败（状态码：{response.status_code}），请查看后端日志。"
+            
+        except requests.exceptions.Timeout:
+            return "大模型服务响应超时，请重试。"
+        except Exception as e:
+            logger.error(f"大模型语义审计失败: {str(e)}")
+            return f"大模型审计异常：{str(e)}"
     
     def quick_check(self, data_content):
         """快速检测数据内容"""

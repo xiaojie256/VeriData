@@ -51,6 +51,10 @@ services:
       FLASK_ENV: development
       FLASK_DEBUG: 1
       MODEL_PATH: /app/models
+      # 🔴 新增：小米 MiMo 开放平台大模型网关配置（OpenAI 协议兼容协议）
+      MIMO_API_BASE: https://api.xiaomimimo.com/v1
+      MIMO_API_KEY: "tp-ccnr3zaiw00em57kqvbgknnfxdl93qzbhi0td67mtzqfy0di"
+      MIMO_MODEL: mimo-v2.5-flash
     ports:
       - "5000:5000"
     networks:

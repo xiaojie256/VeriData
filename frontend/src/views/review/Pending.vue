@@ -102,6 +102,12 @@
             />
           </div>
           <el-empty v-else description="未检测到明显异常" />
+          
+          <!-- 🔴 新增：大模型智能意见 -->
+          <div style="margin-top: 15px; padding: 10px; background-color: #f0f9ff; border-left: 3px solid #0ea5e9; border-radius: 4px;">
+            <span style="color: #0ea5e9; font-weight: 500;">🤖 小米 MiMo 智能合规审查意见：</span>
+            <p style="margin: 8px 0 0 0; color: #333; line-height: 1.6;">{{ aiAnalysis?.llm_insight }}</p>
+          </div>
         </el-card>
         
         <!-- 评分表单 -->
