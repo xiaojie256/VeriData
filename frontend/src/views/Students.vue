@@ -31,26 +31,16 @@
             {{ formatDate(row.added_at) }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="200">
-          <template #default="{ row }">
-            <el-button link type="primary" @click="viewStudentData(row)" size="small">查看数据</el-button>
-            <el-divider direction="vertical" />
-            <el-button 
-              v-if="row.relation_status === 'active'" 
-              link type="danger" 
-              @click="handleTerminate(row.relation_id)"
-              size="small"
-            >
-              移除学生
-            </el-button>
-            <el-button 
-              v-else 
-              link type="warning" 
-              @click="handleTerminate(row.relation_id)"
-              size="small"
-            >
-              撤回申请
-            </el-button>
+        <el-table-column label="操作">
+          <template #default="scope">
+            <template v-if="scope.row.relation_status === 'active'">
+              <el-button link type="primary" @click="viewStudentData(scope.row)" size="small">查看数据</el-button>
+              <el-button link type="danger" @click="handleTerminate(scope.row.relation_id)" size="small">移除学生</el-button>
+            </template>
+
+            <template v-else>
+              <el-button link type="warning" @click="handleTerminate(scope.row.relation_id)" size="small">撤回绑定申请</el-button>
+            </template>
           </template>
         </el-table-column>
       </el-table>
