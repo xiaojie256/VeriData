@@ -171,7 +171,7 @@ router.get("/my-teacher", authenticate, async (req, res) => {
               tsr.id as relation_id, tsr.status as relation_status
        FROM users u
        JOIN teacher_student_relations tsr ON u.id = tsr.teacher_id
-       WHERE tsr.student_id = ? AND tsr.status = 'accepted' AND u.deleted_at IS NULL`,
+       WHERE tsr.student_id = ? AND tsr.status = 'active' AND u.deleted_at IS NULL`,
       [req.user.id],
     );
 
@@ -422,8 +422,9 @@ router.put(
       const relation = relations[0];
 
       if (action === "accept") {
+        // 🔴 修正为数据库合规的 ENUM 字段值 'active'
         await pool.execute(
-          'UPDATE teacher_student_relations SET status = "accepted" WHERE id = ?',
+          'UPDATE teacher_student_relations SET status = "active" WHERE id = ?',
           [relationId],
         );
 

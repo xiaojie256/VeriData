@@ -21,8 +21,8 @@
         </el-table-column>
         <el-table-column prop="relation_status" label="绑定状态" width="100">
           <template #default="{ row }">
-            <el-tag :type="row.relation_status === 'accepted' ? 'success' : 'warning'">
-              {{ row.relation_status === 'accepted' ? '已绑定' : '等待确认' }}
+            <el-tag :type="row.relation_status === 'active' ? 'success' : 'warning'">
+              {{ row.relation_status === 'active' ? '已绑定' : '等待确认' }}
             </el-tag>
           </template>
         </el-table-column>
@@ -36,7 +36,7 @@
             <el-button link type="primary" @click="viewStudentData(row)" size="small">查看数据</el-button>
             <el-divider direction="vertical" />
             <el-button 
-              v-if="row.relation_status === 'accepted'" 
+              v-if="row.relation_status === 'active'" 
               link type="danger" 
               @click="handleTerminate(row.relation_id)"
               size="small"

@@ -24,9 +24,9 @@ router.get(
 
       // 导师只查看自己学生的数据
       if (req.user.role === "teacher") {
-        // 🔴 安全合规重构：必须 status = "accepted"（对方已同意）的正式学生，导师才有权审查其数据
+        // 🔴 安全合规重构：必须 status = "active"（对方已同意）的正式学生，导师才有权审查其提交的数据
         whereClause =
-          'AND d.submitter_id IN (SELECT student_id FROM teacher_student_relations WHERE teacher_id = ? AND status = "accepted")';
+          'AND d.submitter_id IN (SELECT student_id FROM teacher_student_relations WHERE teacher_id = ? AND status = "active")';
         params.push(userId);
       } else if (req.user.role === "expert") {
         // 专家查看所有待盲审的数据（只能查看未分配或分配给自己的）
