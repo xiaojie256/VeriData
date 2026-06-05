@@ -147,7 +147,7 @@ router.get(
     try {
       const [students] = await pool.execute(
         `SELECT u.id, u.username, u.real_name, u.avatar_url, u.status, u.created_at,
-              tsr.status as relation_status, tsr.created_at as added_at
+              tsr.id as relation_id, tsr.status as relation_status, tsr.created_at as added_at
        FROM users u
        JOIN teacher_student_relations tsr ON u.id = tsr.student_id
        WHERE tsr.teacher_id = ? AND u.deleted_at IS NULL
@@ -168,7 +168,7 @@ router.get("/my-teacher", authenticate, async (req, res) => {
   try {
     const [teachers] = await pool.execute(
       `SELECT u.id, u.username, u.real_name, u.avatar_url, u.email,
-              tsr.status as relation_status
+              tsr.id as relation_id, tsr.status as relation_status
        FROM users u
        JOIN teacher_student_relations tsr ON u.id = tsr.teacher_id
        WHERE tsr.student_id = ? AND tsr.status = 'accepted' AND u.deleted_at IS NULL`,

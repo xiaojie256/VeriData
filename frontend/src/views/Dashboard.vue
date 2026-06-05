@@ -89,6 +89,49 @@
       </el-steps>
     </el-card>
     
+    <!-- 🔴 导师申请通知 -->
+    <el-card v-if="pendingTeachers.length > 0" style="margin-bottom: 20px;">
+      <template #header>
+        <div class="card-header">
+          <span>🔔 收到导师绑定申请（{{ pendingTeachers.length }}件）</span>
+        </div>
+      </template>
+      <el-alert
+        v-for="item in pendingTeachers"
+        :key="item.relation_id"
+        :title="`${item.real_name} 老师申请认领你为学生`"
+        type="warning"
+        show-icon
+        style="margin-bottom: 10px;"
+      >
+        <template #default>
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span>{{ item.email }}</span>
+            <div>
+              <el-button type="success" size="small" @click="handleInvitation(item.relation_id, 'accept')">接受</el-button>
+              <el-button type="danger" size="small" @click="handleInvitation(item.relation_id, 'reject')">拒绝</el-button>
+            </div>
+          </div>
+        </template>
+      </el-alert>
+    </el-card>
+
+    <!-- 🔴 我的导师 -->
+    <el-card v-if="teacher" style="margin-bottom: 20px;">
+      <template #header>
+        <div class="card-header">
+          <span>✅ 我的导师</span>
+        </div>
+      </template>
+      <el-descriptions :column="2" border>
+        <el-descriptions-item label="导师姓名">{{ teacher.real_name }}</el-descriptions-item>
+        <el-descriptions-item label="导师邮箱">{{ teacher.email }}</el-descriptions-item>
+      </el-descriptions>
+      <div style="margin-top: 15px;">
+        <el-button type="danger" @click="handleUnbind(teacher.id)">解除师生关系</el-button>
+      </div>
+    </el-card>
+
     <!-- 最近数据 -->
     <el-card>
       <template #header>
@@ -146,6 +189,8 @@ const store = useStore()
 const router = useRouter()
 const loading = ref(false)
 const recentData = ref([])
+const pendingTeachers = ref([])
+const teacher = ref(null)
 const stats = ref({
   myData: 0,
   approved: 0,
@@ -212,6 +257,30 @@ const viewData = (id) => {
   router.push(`/data/${id}`)
 }
 
+// 🔴 处理导师邀请
+const handleInvitation = async (relationId, action) => {
+  try {
+    await api.put(`/users/relations/${relationId}`, { action })
+    ElMessage.success(action === 'accept' ? '已接受导师' : '已拒绝邀请')
+    fetchData()
+  } catch (error) {
+    ElMessage.error(error.error || '操作失败')
+  }
+}
+
+// 🔴 解除师生关系
+const handleUnbind = async () => {
+  if (!teacher.value) return
+  
+  try {
+    await api.delete(`/users/relations/${teacher.value.relation_id}`)
+    ElMessage.success('师生关系已解除')
+    teacher.value = null
+  } catch (error) {
+    ElMessage.error(error.error || '解除失败')
+  }
+}
+
 const fetchData = async () => {
   loading.value = true
   try {
@@ -219,6 +288,24 @@ const fetchData = async () => {
     const response = await api.get('/auth/me')
     // 后端返回格式为 { success: true, data: user }，Axios 拦截器已提取第一层 data
     store.commit('SET_USER', response.data)
+
+    // 🔴 获取导师申请列表
+    try {
+      const pendingRes = await api.get('/users/pending-teachers')
+      pendingTeachers.value = pendingRes.invitations || []
+    } catch (e) {
+      // 接口不存在或无权，忽略
+      pendingTeachers.value = []
+    }
+
+    // 🔴 获取已绑定的导师
+    try {
+      const teacherRes = await api.get('/users/my-teacher')
+      teacher.value = teacherRes.teachers || null
+    } catch (e) {
+      // 接口不存在或无权，忽略
+      teacher.value = null
+    }
 
     // 获取最近数据
     const dataResponse = await api.get('/data/my?page=1&limit=5')

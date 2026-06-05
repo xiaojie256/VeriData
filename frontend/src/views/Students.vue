@@ -12,10 +12,17 @@
       <el-table :data="students" v-loading="loading" style="width: 100%">
         <el-table-column prop="username" label="用户名" min-width="120" />
         <el-table-column prop="real_name" label="真实姓名" min-width="100" />
-        <el-table-column prop="status" label="状态" width="100">
+        <el-table-column prop="status" label="账户状态" width="100">
           <template #default="{ row }">
             <el-tag :type="row.status === 'active' ? 'success' : 'warning'">
               {{ row.status === 'active' ? '正常' : '待激活' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="relation_status" label="绑定状态" width="100">
+          <template #default="{ row }">
+            <el-tag :type="row.relation_status === 'accepted' ? 'success' : 'warning'">
+              {{ row.relation_status === 'accepted' ? '已绑定' : '等待确认' }}
             </el-tag>
           </template>
         </el-table-column>
@@ -24,9 +31,26 @@
             {{ formatDate(row.added_at) }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="150">
+        <el-table-column label="操作" width="200">
           <template #default="{ row }">
-            <el-button link type="primary" @click="viewStudentData(row)">查看数据</el-button>
+            <el-button link type="primary" @click="viewStudentData(row)" size="small">查看数据</el-button>
+            <el-divider direction="vertical" />
+            <el-button 
+              v-if="row.relation_status === 'accepted'" 
+              link type="danger" 
+              @click="handleTerminate(row.relation_id)"
+              size="small"
+            >
+              移除学生
+            </el-button>
+            <el-button 
+              v-else 
+              link type="warning" 
+              @click="handleTerminate(row.relation_id)"
+              size="small"
+            >
+              撤回申请
+            </el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -100,6 +124,17 @@ const addStudent = async () => {
 const viewStudentData = (row) => {
   // 跳转到数据列表，筛选该学生的数据
   router.push('/data/list')
+}
+
+// 🔴 移除学生或撤回申请
+const handleTerminate = async (relationId) => {
+  try {
+    await api.delete(`/users/relations/${relationId}`)
+    ElMessage.success('操作成功')
+    fetchStudents()
+  } catch (error) {
+    ElMessage.error(error.error || '操作失败')
+  }
 }
 
 onMounted(() => {
