@@ -73,10 +73,13 @@
           </template>
         </el-table-column>
         
-        <el-table-column label="操作" width="260" fixed="right">
+        <el-table-column label="操作" width="320" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="editUser(row)">编辑</el-button>
-            <el-button v-if="row.status === 'pending_verification'" link type="success" @click="verifyUser(row)">审核</el-button>
+            <el-button v-if="row.status === 'pending_verification'" link type="success" @click="verifyUser(row)">审核通过</el-button>
+            <el-button v-if="row.status === 'pending_verification'" link type="danger" @click="rejectUser(row)">驳回</el-button>
+            <el-button v-if="row.status === 'active' && !row.id_verified" link type="warning" @click="toggleIdVerified(row, true)">验证身份</el-button>
+            <el-button v-if="row.status === 'active' && row.id_verified" link type="info" @click="toggleIdVerified(row, false)">取消验证</el-button>
             <el-button v-if="row.status === 'active'" link type="danger" @click="suspendUser(row)">封禁</el-button>
             <el-button v-if="row.status === 'suspended'" link type="success" @click="activateUser(row)">解封</el-button>
             <el-button link type="danger" @click="deleteUser(row)">删除</el-button>
@@ -283,12 +286,46 @@ const verifyUser = async (row) => {
   try {
     await ElMessageBox.confirm(`确定要审核通过用户 ${row.username} 吗？`, '确认审核', {
       confirmButtonText: '通过',
-      cancelButtonText: '拒绝',
+      cancelButtonText: '取消',
       type: 'warning'
     })
-    
+
     await api.post(`/admin/users/${row.id}/verify`, { status: 'active' })
     ElMessage.success('审核通过')
+    fetchData()
+  } catch {
+    // 用户取消
+  }
+}
+
+const rejectUser = async (row) => {
+  try {
+    const { value: reason } = await ElMessageBox.prompt(`请输入驳回用户 ${row.username} 的原因`, '驳回审核', {
+      confirmButtonText: '驳回',
+      cancelButtonText: '取消',
+      inputPlaceholder: '资料不完整等',
+      type: 'error'
+    })
+
+    await api.post(`/admin/users/${row.id}/verify`, { status: 'pending_verification', reason: reason || '资料不完整' })
+    ElMessage.success('已驳回')
+    fetchData()
+  } catch {
+    // 用户取消
+  }
+}
+
+const toggleIdVerified = async (row, verified) => {
+  const action = verified ? '验证' : '取消验证'
+  try {
+    await ElMessageBox.confirm(`确定要${action}用户 ${row.username} 的身份吗？`, `确认${action}`, {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: verified ? 'warning' : 'info'
+    })
+
+    await api.post(`/admin/users/${row.id}/id-verified`, { id_verified: verified })
+    ElMessage.success(verified ? '已标记为已验证' : '已取消身份验证')
     fetchData()
   } catch {
     // 用户取消

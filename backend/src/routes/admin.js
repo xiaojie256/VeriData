@@ -133,7 +133,7 @@ router.post(
       const { status, reason } = req.body; // status: active, rejected, suspended
 
       const [users] = await pool.execute(
-        "SELECT username, email, role FROM users WHERE id = ?",
+        "SELECT username, email, role, status, id_card_front FROM users WHERE id = ?",
         [userId],
       );
 
@@ -141,15 +141,21 @@ router.post(
         return res.status(404).json({ error: "用户不存在" });
       }
 
-      await pool.execute("UPDATE users SET status = ? WHERE id = ?", [
-        status,
-        userId,
-      ]);
+      // 仅在从待验证→通过 且 已上传身份证件时才标记身份验证
+      const prevStatus = users[0].status;
+      const hasIdCard = !!users[0].id_card_front;
+      const shouldVerify = prevStatus === "pending_verification" && status === "active" && hasIdCard;
 
-      // 审核通过时同步标记身份验证状态
-      if (status === "active") {
-        await pool.execute("UPDATE users SET id_verified = 1 WHERE id = ?", [userId]);
+      const updateFields = ["status = ?"];
+      const updateParams = [status];
+      if (shouldVerify) {
+        updateFields.push("id_verified = 1");
       }
+
+      await pool.execute(
+        `UPDATE users SET ${updateFields.join(", ")} WHERE id = ?`,
+        [...updateParams, userId],
+      );
 
       // 动态推断通知标题与具体通知文本内容
       let title = "身份验证未通过";
@@ -185,6 +191,43 @@ router.post(
     } catch (error) {
       logger.error("用户审核状态变更失败:", error);
       res.status(500).json({ error: "审核或封禁状态应用失败" });
+    }
+  },
+);
+
+// 单独设置用户身份验证状态（不影响账号状态）
+router.post(
+  "/users/:id/id-verified",
+  authenticate,
+  authorize("admin"),
+  async (req, res) => {
+    try {
+      const userId = req.params.id;
+      const { id_verified } = req.body; // true/false
+
+      const [users] = await pool.execute(
+        "SELECT id FROM users WHERE id = ?",
+        [userId],
+      );
+      if (users.length === 0) {
+        return res.status(404).json({ error: "用户不存在" });
+      }
+
+      await pool.execute("UPDATE users SET id_verified = ? WHERE id = ?", [
+        id_verified ? 1 : 0,
+        userId,
+      ]);
+
+      logger.info(
+        `管理员手动设置身份验证: user_id=${userId}, id_verified=${id_verified}`,
+      );
+
+      res.json({
+        message: id_verified ? "已标记为已验证" : "已取消身份验证",
+      });
+    } catch (error) {
+      logger.error("设置身份验证状态失败:", error);
+      res.status(500).json({ error: "操作失败" });
     }
   },
 );

@@ -15,7 +15,7 @@ const ensureDir = (dir) => {
 // 存储配置
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const subDir = req.uploadType === 'avatar' ? 'avatars' : 'data';
+    const subDir = req.uploadType === 'avatar' ? 'avatars' : req.uploadType === 'id-card' ? 'id-cards' : 'data';
     const destPath = path.join(UPLOAD_PATH, subDir);
     ensureDir(destPath);
     cb(null, destPath);
@@ -31,7 +31,8 @@ const storage = multer.diskStorage({
 const fileFilter = (req, file, cb) => {
   const allowedTypes = {
     'data': ['.csv', '.xlsx', '.xls', '.json', '.txt', '.pdf', '.doc', '.docx', '.zip', '.rar'],
-    'avatar': ['.jpg', '.jpeg', '.png', '.gif']
+    'avatar': ['.jpg', '.jpeg', '.png', '.gif'],
+    'id-card': ['.jpg', '.jpeg', '.png']
   };
   
   const type = req.uploadType || 'data';

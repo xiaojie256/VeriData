@@ -2,6 +2,7 @@ const express = require("express");
 const pool = require("../utils/database");
 const logger = require("../utils/logger");
 const { authenticate, authorize } = require("../middleware/auth");
+const { upload, handleUploadError } = require("../middleware/upload");
 
 const router = express.Router();
 
@@ -261,6 +262,51 @@ router.post(
 );
 
 // ==================== 3. 动态拦截路由（垫底） ====================
+
+// 提交身份验证资料（身份证号 + 正反面照片）
+router.post(
+  "/verify/id-card",
+  authenticate,
+  (req, res, next) => {
+    req.uploadType = "id-card";
+    next();
+  },
+  upload.fields([
+    { name: "id_card_front", maxCount: 1 },
+    { name: "id_card_back", maxCount: 1 },
+  ]),
+  handleUploadError,
+  async (req, res) => {
+    try {
+      const { id_card_number } = req.body;
+
+      if (!id_card_number || id_card_number.length < 15 || id_card_number.length > 18) {
+        return res.status(400).json({ error: "请输入有效的身份证号码（15或18位）" });
+      }
+
+      const frontFile = req.files?.id_card_front?.[0];
+      const backFile = req.files?.id_card_back?.[0];
+
+      if (!frontFile || !backFile) {
+        return res.status(400).json({ error: "请上传身份证正反面照片" });
+      }
+
+      const frontUrl = `/uploads/id-cards/${frontFile.filename}`;
+      const backUrl = `/uploads/id-cards/${backFile.filename}`;
+
+      await pool.execute(
+        "UPDATE users SET id_card_number = ?, id_card_front = ?, id_card_back = ?, status = 'pending_verification' WHERE id = ?",
+        [id_card_number, frontUrl, backUrl, req.user.id],
+      );
+
+      logger.info(`用户提交身份验证资料: user_id=${req.user.id}`);
+      res.json({ message: "身份验证资料已提交，等待管理员审核" });
+    } catch (error) {
+      logger.error("提交身份验证资料失败:", error);
+      res.status(500).json({ error: "提交失败，请稍后重试" });
+    }
+  },
+);
 
 // 获取用户详情
 router.get("/:id", authenticate, async (req, res) => {

@@ -77,22 +77,89 @@
           <template #header>
             <span>修改密码</span>
           </template>
-          
+
           <el-form :model="passwordForm" :rules="passwordRules" ref="passwordFormRef" label-width="100px">
             <el-form-item label="旧密码" prop="oldPassword">
               <el-input v-model="passwordForm.oldPassword" type="password" show-password />
             </el-form-item>
-            
+
             <el-form-item label="新密码" prop="newPassword">
               <el-input v-model="passwordForm.newPassword" type="password" show-password />
             </el-form-item>
-            
+
             <el-form-item label="确认密码" prop="confirmPassword">
               <el-input v-model="passwordForm.confirmPassword" type="password" show-password />
             </el-form-item>
-            
+
             <el-form-item>
               <el-button type="primary" @click="changePassword">修改密码</el-button>
+            </el-form-item>
+          </el-form>
+        </el-card>
+
+        <el-card style="margin-top: 20px;">
+          <template #header>
+            <div class="card-header">
+              <span>身份验证</span>
+              <el-tag v-if="user?.id_verified" type="success" size="small">已验证</el-tag>
+              <el-tag v-else-if="user?.status === 'pending_verification'" type="warning" size="small">审核中</el-tag>
+              <el-tag v-else type="info" size="small">未验证</el-tag>
+            </div>
+          </template>
+
+          <div v-if="user?.id_verified" style="text-align: center; padding: 20px 0; color: #67C23A;">
+            <el-icon :size="48"><CircleCheck /></el-icon>
+            <p style="margin-top: 10px;">您的身份已通过验证</p>
+          </div>
+
+          <div v-else-if="user?.status === 'pending_verification' && idCardForm.submitted" style="text-align: center; padding: 20px 0; color: #E6A23C;">
+            <el-icon :size="48"><Clock /></el-icon>
+            <p style="margin-top: 10px;">身份验证资料已提交，请等待管理员审核</p>
+          </div>
+
+          <el-form v-else :model="idCardForm" :rules="idCardRules" ref="idCardFormRef" label-width="100px">
+            <el-form-item label="身份证号" prop="id_card_number">
+              <el-input v-model="idCardForm.id_card_number" placeholder="请输入18位身份证号码" maxlength="18" />
+            </el-form-item>
+
+            <el-form-item label="正面照片" prop="id_card_front">
+              <el-upload
+                action="#"
+                :auto-upload="false"
+                :show-file-list="false"
+                :on-change="(file) => handleIdCardChange(file, 'front')"
+                accept=".jpg,.jpeg,.png"
+              >
+                <div v-if="idCardForm.frontPreview" class="id-card-preview">
+                  <img :src="idCardForm.frontPreview" />
+                </div>
+                <div v-else class="id-card-upload">
+                  <el-icon :size="28"><Upload /></el-icon>
+                  <span>点击上传身份证正面</span>
+                </div>
+              </el-upload>
+            </el-form-item>
+
+            <el-form-item label="反面照片" prop="id_card_back">
+              <el-upload
+                action="#"
+                :auto-upload="false"
+                :show-file-list="false"
+                :on-change="(file) => handleIdCardChange(file, 'back')"
+                accept=".jpg,.jpeg,.png"
+              >
+                <div v-if="idCardForm.backPreview" class="id-card-preview">
+                  <img :src="idCardForm.backPreview" />
+                </div>
+                <div v-else class="id-card-upload">
+                  <el-icon :size="28"><Upload /></el-icon>
+                  <span>点击上传身份证反面</span>
+                </div>
+              </el-upload>
+            </el-form-item>
+
+            <el-form-item>
+              <el-button type="primary" @click="submitIdCard" :loading="idCardLoading">提交验证</el-button>
             </el-form-item>
           </el-form>
         </el-card>
@@ -105,7 +172,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useStore } from 'vuex'
 import { ElMessage } from 'element-plus'
-import { UserFilled } from '@element-plus/icons-vue'
+import { UserFilled, CircleCheck, Clock, Upload } from '@element-plus/icons-vue'
 import { api } from '../store'
 
 const store = useStore()
@@ -145,6 +212,24 @@ const passwordForm = ref({
   newPassword: '',
   confirmPassword: ''
 })
+
+const idCardFormRef = ref()
+const idCardLoading = ref(false)
+const idCardForm = ref({
+  id_card_number: '',
+  id_card_front: null,
+  id_card_back: null,
+  frontPreview: '',
+  backPreview: '',
+  submitted: false
+})
+
+const idCardRules = {
+  id_card_number: [
+    { required: true, message: '请输入身份证号码', trigger: 'blur' },
+    { pattern: /^\d{17}[\dXx]$/, message: '请输入有效的18位身份证号码', trigger: 'blur' }
+  ]
+}
 
 const validatePass = (rule, value, callback) => {
   if (value !== passwordForm.value.newPassword) {
@@ -206,6 +291,50 @@ const changePassword = async () => {
   }
 }
 
+const handleIdCardChange = (file, side) => {
+  const raw = file.raw
+  if (!['image/jpeg', 'image/png'].includes(raw.type)) {
+    ElMessage.error('仅支持 JPG/PNG 格式图片')
+    return
+  }
+  if (raw.size > 5 * 1024 * 1024) {
+    ElMessage.error('图片大小不能超过 5MB')
+    return
+  }
+  idCardForm.value[side === 'front' ? 'id_card_front' : 'id_card_back'] = raw
+  idCardForm.value[side === 'front' ? 'frontPreview' : 'backPreview'] = URL.createObjectURL(raw)
+}
+
+const submitIdCard = async () => {
+  try {
+    await idCardFormRef.value.validate()
+
+    if (!idCardForm.value.id_card_front || !idCardForm.value.id_card_back) {
+      ElMessage.error('请上传身份证正反面照片')
+      return
+    }
+
+    idCardLoading.value = true
+
+    const formData = new FormData()
+    formData.append('id_card_number', idCardForm.value.id_card_number)
+    formData.append('id_card_front', idCardForm.value.id_card_front)
+    formData.append('id_card_back', idCardForm.value.id_card_back)
+
+    await api.post('/users/verify/id-card', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    })
+
+    ElMessage.success('身份验证资料已提交，等待管理员审核')
+    idCardForm.value.submitted = true
+    await store.dispatch('fetchUser')
+  } catch (error) {
+    ElMessage.error(error.error || '提交失败')
+  } finally {
+    idCardLoading.value = false
+  }
+}
+
 onMounted(() => {
   if (user.value) {
     profileForm.value = {
@@ -243,5 +372,45 @@ onMounted(() => {
 
 .quota-display {
   text-align: center;
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.id-card-upload {
+  width: 200px;
+  height: 120px;
+  border: 1px dashed #dcdfe6;
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: #909399;
+  cursor: pointer;
+  transition: border-color 0.2s;
+}
+
+.id-card-upload:hover {
+  border-color: #409eff;
+  color: #409eff;
+}
+
+.id-card-preview {
+  width: 200px;
+  height: 120px;
+  border: 1px solid #dcdfe6;
+  border-radius: 6px;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.id-card-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 </style>

@@ -140,8 +140,8 @@ export default createStore({
     // 获取当前用户
     async fetchUser({ commit }) {
       const response = await api.get('/auth/me')
-      commit('SET_USER', response.user)
-      return response.user
+      commit('SET_USER', response.data)
+      return response.data
     },
     
     // 获取通知

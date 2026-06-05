@@ -215,13 +215,14 @@ const viewData = (id) => {
 const fetchData = async () => {
   loading.value = true
   try {
-    // 同步用户配额信息
-    const userProfile = await api.get('/user/profile')
-    store.commit('setUser', userProfile.user)
+    // 同步用户配额信息（对应后端 auth.js 中的 /me 接口）
+    const response = await api.get('/auth/me')
+    // 后端返回格式为 { success: true, data: user }，Axios 拦截器已提取第一层 data
+    store.commit('SET_USER', response.data)
 
     // 获取最近数据
-    const response = await api.get('/data/my?page=1&limit=5')
-    recentData.value = response.data
+    const dataResponse = await api.get('/data/my?page=1&limit=5')
+    recentData.value = dataResponse.data
     
     // 获取统计
     const statsResponse = await api.get('/data/my?page=1&limit=1')
