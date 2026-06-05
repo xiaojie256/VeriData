@@ -97,9 +97,20 @@ router.get("/notifications/list", authenticate, async (req, res) => {
       [userId],
     );
 
+    // 计算满足当前筛选条件的通知总条数
+    const [totalCount] = await pool.execute(
+      `SELECT COUNT(*) as total FROM notifications ${whereClause}`,
+      params,
+    );
+
     res.json({
       notifications,
       unread_count: unreadCount[0].count,
+      pagination: {
+        page,
+        limit,
+        total: totalCount[0].total,
+      },
     });
   } catch (error) {
     logger.error("获取通知失败:", error);

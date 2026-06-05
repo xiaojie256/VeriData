@@ -316,7 +316,8 @@ const fetchReviewRecords = async () => {
 }
 
 const downloadData = () => {
-  window.open(`/api/data/${route.params.id}/download`, '_blank')
+  const token = localStorage.getItem('token')
+  window.open(`/api/data/${route.params.id}/download?token=${token}`, '_blank')
 }
 
 const showSubmitDialog = () => {

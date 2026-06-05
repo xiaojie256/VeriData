@@ -8,11 +8,11 @@ if (!JWT_SECRET) {
   throw new Error('JWT_SECRET 环境变量未设置');
 }
 
-// 验证JWT令牌
+// 验证JWT令牌（支持 Authorization header 和 query.token 两种方式）
 const authenticate = async (req, res, next) => {
   try {
-    const token = req.headers.authorization?.split(' ')[1];
-    
+    const token = req.headers.authorization?.split(' ')[1] || req.query.token;
+
     if (!token) {
       return res.status(401).json({ error: '未提供认证令牌' });
     }

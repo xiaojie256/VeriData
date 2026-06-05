@@ -4,31 +4,46 @@
       <h2 class="page-title">消息通知</h2>
       <el-button v-if="unreadCount > 0" @click="markAllRead">全部标为已读</el-button>
     </div>
-    
+
     <el-card>
       <el-tabs v-model="activeTab">
         <el-tab-pane label="全部消息" name="all">
-          <notification-list :notifications="allNotifications" @read="markRead" />
+          <notification-list :notifications="notifications" @read="markRead" />
         </el-tab-pane>
         <el-tab-pane :label="`未读消息 (${unreadCount})`" name="unread">
-          <notification-list :notifications="unreadNotifications" @read="markRead" />
+          <notification-list :notifications="notifications" @read="markRead" />
         </el-tab-pane>
       </el-tabs>
+
+      <div class="pagination-container" v-if="pagination.total > pagination.limit">
+        <el-pagination
+          v-model:current-page="pagination.page"
+          :page-size="pagination.limit"
+          :total="pagination.total"
+          layout="total, prev, pager, next"
+          @current-change="fetchNotifications"
+        />
+      </div>
     </el-card>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, h } from 'vue'
+import { ref, reactive, watch, onMounted, h } from 'vue'
+import { useStore } from 'vuex'
 import { ElMessage, ElTag, ElLink, ElEmpty } from 'element-plus'
 import { api } from '../store'
 
+const store = useStore()
 const activeTab = ref('all')
 const notifications = ref([])
 const unreadCount = ref(0)
 
-const allNotifications = computed(() => notifications.value)
-const unreadNotifications = computed(() => notifications.value.filter(n => !n.is_read))
+const pagination = reactive({
+  page: 1,
+  limit: 20,
+  total: 0
+})
 
 const typeMap = {
   'system': '系统',
@@ -85,9 +100,11 @@ const NotificationList = {
 
 const fetchNotifications = async () => {
   try {
-    const response = await api.get('/users/notifications/list')
+    const unreadOnly = activeTab.value === 'unread' ? 'true' : 'false'
+    const response = await api.get(`/users/notifications/list?page=${pagination.page}&limit=${pagination.limit}&unread_only=${unreadOnly}`)
     notifications.value = response.notifications
     unreadCount.value = response.unread_count
+    pagination.total = response.pagination?.total || 0
   } catch (error) {
     ElMessage.error('获取通知失败')
   }
@@ -95,7 +112,7 @@ const fetchNotifications = async () => {
 
 const markRead = async (id) => {
   try {
-    await api.post(`/users/notifications/${id}/read`)
+    await store.dispatch('markNotificationRead', id)
     await fetchNotifications()
   } catch (error) {
     ElMessage.error('操作失败')
@@ -106,11 +123,17 @@ const markAllRead = async () => {
   try {
     await api.post('/users/notifications/read-all')
     ElMessage.success('已全部标为已读')
+    await store.dispatch('fetchNotifications')
     await fetchNotifications()
   } catch (error) {
     ElMessage.error('操作失败')
   }
 }
+
+watch(activeTab, () => {
+  pagination.page = 1
+  fetchNotifications()
+})
 
 onMounted(() => {
   fetchNotifications()
@@ -156,5 +179,11 @@ onMounted(() => {
     color: #606266;
     line-height: 1.6;
   }
+}
+
+.pagination-container {
+  margin-top: 20px;
+  display: flex;
+  justify-content: flex-end;
 }
 </style>

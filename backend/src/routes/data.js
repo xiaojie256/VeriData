@@ -5,8 +5,9 @@ const path = require('path');
 const pool = require('../utils/database');
 const logger = require('../utils/logger');
 const { authenticate, authorize, optionalAuth } = require('../middleware/auth');
-const { upload, handleUploadError } = require('../middleware/upload');
+const { upload, handleUploadError, verifyFileIntegrity } = require('../middleware/upload');
 const { auditLog } = require('../middleware/audit');
+const { withTransaction } = require('../utils/transaction');
 
 const router = express.Router();
 const UPLOAD_PATH = process.env.UPLOAD_PATH || './uploads';
@@ -23,11 +24,11 @@ const checkQuota = async (userId) => {
     'SELECT quota_total, quota_used FROM users WHERE id = ?',
     [userId]
   );
-  
+
   if (users.length === 0) return { hasQuota: false };
-  
+
   const { quota_total, quota_used } = users[0];
-  return { 
+  return {
     hasQuota: quota_used < quota_total,
     total: quota_total,
     used: quota_used,
@@ -41,87 +42,92 @@ const consumeQuota = async (userId, dataId, actionType = 'data_submit') => {
     'UPDATE users SET quota_used = quota_used + 1 WHERE id = ?',
     [userId]
   );
-  
+
   await pool.execute(
     'INSERT INTO quota_usage_logs (user_id, action_type, quota_consumed, data_id) VALUES (?, ?, 1, ?)',
     [userId, actionType, dataId]
   );
 };
 
-// 上传数据文件
+// 上传数据文件（使用事务+行锁防止并发额度击穿）
 router.post('/upload', authenticate, authorize('student', 'teacher', 'admin', 'civilian'), (req, res, next) => {
   req.uploadType = 'data';
   next();
-}, upload.single('file'), handleUploadError, async (req, res) => {
+}, upload.single('file'), handleUploadError, verifyFileIntegrity, async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: '未上传文件' });
     }
 
-    // 检查配额
-    const quota = await checkQuota(req.user.id);
-    if (!quota.hasQuota) {
-      // 删除已上传文件
-      fs.unlinkSync(req.file.path);
-      return res.status(403).json({ 
-        error: '配额已用完', 
-        quota: { total: quota.total, used: quota.used }
-      });
-    }
+    const resultData = await withTransaction(async (connection) => {
+      // 行级排他锁：同一用户的并发请求在此排队，防止额度击穿
+      const [users] = await connection.execute(
+        'SELECT quota_total, quota_used FROM users WHERE id = ? FOR UPDATE',
+        [req.user.id]
+      );
 
-    const fileHash = calculateFileHash(req.file.path);
+      if (users.length === 0 || users[0].quota_used >= users[0].quota_total) {
+        throw new Error('QUOTA_EXHAUSTED');
+      }
 
-    // 检查文件是否已存在（防止重复上传）
-    const [existing] = await pool.execute(
-      'SELECT id FROM data_submissions WHERE file_hash = ? AND submitter_id = ? AND deleted_at IS NULL',
-      [fileHash, req.user.id]
-    );
+      const fileHash = calculateFileHash(req.file.path);
 
-    if (existing.length > 0) {
-      fs.unlinkSync(req.file.path);
-      return res.status(409).json({ error: '该文件已上传过', data_id: existing[0].id });
-    }
+      const [existing] = await connection.execute(
+        'SELECT id FROM data_submissions WHERE file_hash = ? AND submitter_id = ? AND deleted_at IS NULL',
+        [fileHash, req.user.id]
+      );
 
-    const { title, description, data_type = 'raw', visibility = 'private', liability_statement } = req.body;
+      if (existing.length > 0) throw new Error('DUPLICATE_FILE');
 
-    // 创建数据记录
-    const [result] = await pool.execute(
-      `INSERT INTO data_submissions (submitter_id, title, description, data_type, data_format, 
-       file_path, file_size, file_hash, original_filename, visibility, liability_statement, is_liability_accepted)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        req.user.id,
-        title || req.file.originalname,
-        description || null,
-        data_type,
-        path.extname(req.file.originalname).replace('.', ''),
-        req.file.path,
-        req.file.size,
-        fileHash,
-        req.file.originalname,
-        visibility,
-        liability_statement || null,
-        liability_statement ? 1 : 0
-      ]
-    );
+      const { title, description, data_type = 'raw', visibility = 'private', liability_statement } = req.body;
 
-    // 消耗配额
-    await consumeQuota(req.user.id, result.insertId);
+      const [insertResult] = await connection.execute(
+        `INSERT INTO data_submissions (submitter_id, title, description, data_type, data_format,
+         file_path, file_size, file_hash, original_filename, visibility, liability_statement, is_liability_accepted)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          req.user.id,
+          title || req.file.originalname,
+          description || null,
+          data_type,
+          path.extname(req.file.originalname).replace('.', ''),
+          req.file.path,
+          req.file.size,
+          fileHash,
+          req.file.originalname,
+          visibility,
+          liability_statement || null,
+          liability_statement ? 1 : 0
+        ]
+      );
 
-    logger.info(`数据上传成功: ID=${result.insertId}, User=${req.user.username}`);
+      await connection.execute('UPDATE users SET quota_used = quota_used + 1 WHERE id = ?', [req.user.id]);
+
+      await connection.execute(
+        'INSERT INTO quota_usage_logs (user_id, action_type, quota_consumed, data_id) VALUES (?, "data_submit", 1, ?)',
+        [req.user.id, insertResult.insertId]
+      );
+
+      return { dataId: insertResult.insertId, fileHash, remaining: users[0].quota_total - users[0].quota_used - 1 };
+    });
+
+    logger.info(`数据上传成功: ID=${resultData.dataId}, User=${req.user.username}`);
 
     res.status(201).json({
       message: '上传成功',
-      data_id: result.insertId,
-      file_hash: fileHash,
-      quota_remaining: quota.remaining - 1
+      data_id: resultData.dataId,
+      file_hash: resultData.fileHash,
+      quota_remaining: resultData.remaining
     });
   } catch (error) {
-    logger.error('数据上传失败:', error);
-    // 清理文件
-    if (req.file && fs.existsSync(req.file.path)) {
-      fs.unlinkSync(req.file.path);
+    if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+    if (error.message === 'QUOTA_EXHAUSTED') {
+      return res.status(403).json({ error: '配额已用完' });
     }
+    if (error.message === 'DUPLICATE_FILE') {
+      return res.status(409).json({ error: '该文件已上传过' });
+    }
+    logger.error('数据上传失败:', error);
     res.status(500).json({ error: '上传失败' });
   }
 });
@@ -159,11 +165,14 @@ router.get('/my', authenticate, async (req, res) => {
 
     const [data] = await pool.query(query, params);
 
-    // 获取总数
-    const [countResult] = await pool.execute(
-      'SELECT COUNT(*) as total FROM data_submissions WHERE submitter_id = ? AND deleted_at IS NULL',
-      [req.user.id.toString()]
-    );
+    // 修正：总数统计必须动态复用相同的过滤条件，防止分页总数失真
+    let countQuery = 'SELECT COUNT(*) as total FROM data_submissions WHERE submitter_id = ? AND deleted_at IS NULL';
+    let countParams = [userId];
+    if (status) {
+      countQuery += ' AND review_status = ?';
+      countParams.push(status);
+    }
+    const [countResult] = await pool.execute(countQuery, countParams);
 
     res.json({
       data,
@@ -198,11 +207,11 @@ router.get('/:id', authenticate, auditLog('data', 'view'), async (req, res) => {
 
     const data = dataList[0];
 
-    // 权限检查
-    const hasPermission = 
-      data.submitter_id === req.user.id || // 提交者本人
-      data.visibility === 'public' || // 公开数据
-      req.user.role === 'admin' || // 管理员
+    // 修正：只有最终终审通过(final_approved)的公开数据才允许全员免签查看
+    const hasPermission =
+      data.submitter_id === req.user.id ||
+      (data.visibility === 'public' && data.review_status === 'final_approved') ||
+      req.user.role === 'admin' ||
       (data.visibility === 'limited' && data.view_permission && 
        JSON.parse(data.view_permission).includes(req.user.id)); // 在权限列表中
 
