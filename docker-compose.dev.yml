@@ -60,10 +60,9 @@ services:
   frontend:
     build:
       context: ./frontend
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.dev
     container_name: veri-data-frontend
     restart: unless-stopped
-    command: npm run serve
     volumes:
       - ./frontend:/app
       - /app/node_modules
