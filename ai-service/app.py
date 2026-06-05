@@ -48,6 +48,17 @@ class DataAnalyzer:
                 'anomaly_detection': self._detect_anomalies(df),
                 'consistency_check': self._check_consistency(df)
             }
+
+            # 计算数据矩阵的特征指纹（用于后续克隆数据比对与多重验证提取）
+            numeric_df = df.select_dtypes(include=[np.number])
+            feature_fingerprint = {}
+            if not numeric_df.empty:
+                feature_fingerprint = {
+                    "matrix_sum": float(numeric_df.sum().sum()),
+                    "matrix_std_mean": float(numeric_df.std().mean()) if len(numeric_df) > 1 else 0.0,
+                    "correlation_hash": float(numeric_df.corr().abs().sum().sum()) if len(numeric_df.columns) > 1 else 0.0
+                }
+            analysis_result['content_fingerprint'] = feature_fingerprint
             
             # 计算综合评分
             score = self._calculate_score(analysis_result)

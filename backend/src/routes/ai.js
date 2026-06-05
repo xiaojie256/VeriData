@@ -1,5 +1,6 @@
 const express = require('express');
 const axios = require('axios');
+const fs = require('fs');
 const pool = require('../utils/database');
 const logger = require('../utils/logger');
 const { authenticate, authorize } = require('../middleware/auth');
@@ -32,6 +33,15 @@ router.post('/analyze/:dataId', authenticate, async (req, res) => {
     // 检查是否正在分析中
     if (data.ai_check_status === 'running') {
       return res.status(400).json({ error: 'AI检测正在进行中' });
+    }
+
+    // 强制内核将写缓存同步到物理磁盘，规避 Docker 挂载下的异步 I/O 延迟死锁
+    try {
+      const fd = fs.openSync(data.file_path, 'r+');
+      fs.fsyncSync(fd);
+      fs.closeSync(fd);
+    } catch (ioErr) {
+      logger.error(`磁盘同步失败: ${ioErr.message}`);
     }
 
     // 更新状态为分析中
