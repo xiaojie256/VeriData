@@ -162,11 +162,10 @@ router.get(
   },
 );
 
-// 获取我的导师（学生专享）
+// 🔴 核心修复：移除角色鉴权！允许已登录的所有用户访问此接口查询绑定的导师
 router.get(
   "/my-teacher",
   authenticate,
-  authorize("student"),
   async (req, res) => {
     try {
       const [teachers] = await pool.execute(
@@ -235,11 +234,17 @@ router.post(
       );
 
       if (students.length === 0) {
-        return res.status(404).json({ error: "未找到该学生，请核对学号或姓名是否正确" });
+        return res
+          .status(404)
+          .json({ error: "未找到该学生，请核对学号或姓名是否正确" });
       }
 
       if (students.length > 1) {
-        return res.status(400).json({ error: "存在同名学生，请让学生提供精确的【登录账号】进行绑定" });
+        return res
+          .status(400)
+          .json({
+            error: "存在同名学生，请让学生提供精确的【登录账号】进行绑定",
+          });
       }
 
       const studentId = students[0].id;
