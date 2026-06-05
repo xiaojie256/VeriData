@@ -1,0 +1,82 @@
+version: '3.8'
+
+services:
+  # 后端 - 开发模式：nodemon 热重载
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: veri-data-backend
+    restart: unless-stopped
+    command: npm run dev
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+      - ./uploads:/app/uploads
+      - ./logs:/app/logs
+    environment:
+      NODE_ENV: development
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_USER: root
+      DB_PASSWORD: VeriData@2024
+      DB_NAME: veri_data
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      JWT_SECRET: VeriData_JWT_Secret_Key_2024_Secure
+      JWT_EXPIRES_IN: 7d
+      AI_SERVICE_URL: http://ai-service:5000
+      UPLOAD_PATH: /app/uploads
+    ports:
+      - "3000:3000"
+    depends_on:
+      - mysql
+      - redis
+    networks:
+      - veri-data-network
+
+  # AI 服务 - 开发模式：flask --reload 热重载
+  ai-service:
+    build:
+      context: ./ai-service
+      dockerfile: Dockerfile
+    container_name: veri-data-ai
+    restart: unless-stopped
+    command: python app.py
+    volumes:
+      - ./ai-service:/app
+      - ./ai-service/models:/app/models
+      - ./logs:/app/logs
+    environment:
+      FLASK_ENV: development
+      FLASK_DEBUG: 1
+      MODEL_PATH: /app/models
+    ports:
+      - "5000:5000"
+    networks:
+      - veri-data-network
+
+  # 前端 - 开发模式：vue-cli-service serve 热更新
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: veri-data-frontend
+    restart: unless-stopped
+    command: npm run serve
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      CHOKIDAR_USEPOLLING: 'true'
+      VUE_APP_API_URL: http://localhost:3000
+    ports:
+      - "8080:8080"
+    depends_on:
+      - backend
+    networks:
+      - veri-data-network
+
+networks:
+  veri-data-network:
+    driver: bridge

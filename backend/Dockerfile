@@ -4,7 +4,8 @@ WORKDIR /app
 
 COPY package*.json ./
 
-RUN npm install --production
+# 安装全部依赖（含 nodemon 用于开发热重载）
+RUN npm install
 
 COPY . .
 

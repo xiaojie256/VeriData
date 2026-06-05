@@ -10,6 +10,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# 安装 flask 开发服务器（用于 --reload 热重载）
+RUN pip install --no-cache-dir flask
+
 COPY . .
 
 EXPOSE 5000
