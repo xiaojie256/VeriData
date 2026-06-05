@@ -1,21 +1,16 @@
 import { createStore } from "vuex";
 import axios from "axios";
 
-const API_URL = process.env.VUE_APP_API_URL || "http://localhost:3000/api";
-
-// 创建axios实例
+// 🔴 核心修复：全站统一强制走相对路径！不管什么页面发请求，通通对齐发给前端自己的开发服务器
 const api = axios.create({
-  baseURL: API_URL,
+  baseURL: '/api',
   timeout: 30000,
 });
 
 // 请求拦截器
 api.interceptors.request.use(
   (config) => {
-    // 🔴 核心修复：自动检测并补齐 /api 前缀，防止被 Axios 根路径规则抹除
-    if (config.url && !config.url.startsWith("/api")) {
-      config.url = "/api" + config.url;
-    }
+    // 🔴 核心修复：删掉之前临时加的 URL 补丁，保持干净
     const token = localStorage.getItem("token");
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;

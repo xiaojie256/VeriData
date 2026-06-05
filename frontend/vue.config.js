@@ -9,9 +9,10 @@ module.exports = defineConfig({
     port: 8080,
     proxy: {
       "/api": {
-        target: process.env.VUE_APP_API_URL || "http://localhost:3000",
+        // 🔴 核心修复：既然运行在 Docker 内部，就利用 Docker DNS 机制直接指向后端的容器服务名 'backend'
+        // 彻底丢弃会引发容器自解析死循环的 'localhost'
+        target: "http://backend:3000",
         changeOrigin: true,
-        xfwd: true, // 🔴 核心修复：强制 Webpack 开发服务器代理透传 X-Forwarded-For 真实物理机 IP 头
         pathRewrite: {
           "^/api": "/api",
         },
