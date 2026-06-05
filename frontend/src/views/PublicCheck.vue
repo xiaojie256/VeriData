@@ -140,9 +140,7 @@
 import { ref, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { UploadFilled, Search } from '@element-plus/icons-vue'
-import axios from 'axios'
-
-const API_URL = process.env.VUE_APP_API_URL || 'http://localhost:3000/api'
+import { api } from '@/store' // 🔴 修复：改用系统标准封装的带有拦截器的 api 实例
 
 const inputMode = ref('paste')
 const dataContent = ref('')
@@ -178,7 +176,8 @@ const startCheck = async () => {
   
   checking.value = true
   try {
-    const response = await axios.post(`${API_URL}/ai/public-check`, {
+    // 🔴 修复：交由全局网络实例自动适配开发环境与基础前缀
+    const response = await api.post('/ai/public-check', {
       data_content: dataContent.value
     })
     result.value = response.data
