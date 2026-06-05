@@ -227,14 +227,19 @@ router.post(
     try {
       const { student_username } = req.body;
 
-      // 查找学生
+      // 🔴 核心修复：双重容错检索 - 先查username，再查real_name
+      // 如果输入的是账号，直接精确匹配；如果输入的是名字且学校唯一，也能成功绑定
       const [students] = await pool.execute(
-        'SELECT id FROM users WHERE username = ? AND role = "student"',
-        [student_username],
+        'SELECT id FROM users WHERE (username = ? OR real_name = ?) AND role = "student"',
+        [student_username, student_username],
       );
 
       if (students.length === 0) {
-        return res.status(404).json({ error: "学生不存在" });
+        return res.status(404).json({ error: "未找到该学生，请核对学号或姓名是否正确" });
+      }
+
+      if (students.length > 1) {
+        return res.status(400).json({ error: "存在同名学生，请让学生提供精确的【登录账号】进行绑定" });
       }
 
       const studentId = students[0].id;

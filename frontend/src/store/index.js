@@ -3,7 +3,7 @@ import axios from "axios";
 
 // 🔴 核心修复：全站统一强制走相对路径！不管什么页面发请求，通通对齐发给前端自己的开发服务器
 const api = axios.create({
-  baseURL: '/api',
+  baseURL: "/api",
   timeout: 30000,
 });
 

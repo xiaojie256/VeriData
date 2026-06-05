@@ -39,6 +39,9 @@
           <el-input v-model="addForm.student_username" placeholder="请输入学生用户名" />
         </el-form-item>
       </el-form>
+      <div style="color: #e64545; font-size: 12px; margin-top: 12px;">
+        ⚠️ 重要提示：系统采用强绑定机制。请务必输入学生注册时使用的【唯一账号/学号】，输入真实姓名将导致绑定失败。如存在同名学生，只能用账号绑定。
+      </div>
       <template #footer>
         <el-button @click="showAddDialog = false">取消</el-button>
         <el-button type="primary" @click="addStudent">添加</el-button>
