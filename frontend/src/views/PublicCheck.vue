@@ -180,7 +180,8 @@ const startCheck = async () => {
     const response = await api.post('/ai/public-check', {
       data_content: dataContent.value
     })
-    result.value = response.data
+    // 🔴 核心修复：响应拦截器已处理response，直接赋值（去除不存在的.data级联）
+    result.value = response
   } catch (error) {
     ElMessage.error('检测失败，请稍后重试')
   } finally {

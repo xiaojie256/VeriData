@@ -30,8 +30,9 @@ router.get(
 
       // 教师只能查看自己的学生
       if (req.user.role === "teacher") {
+        // 🔴 安全重构：将 "active" 修正为 "accepted"，防止 pending 状态下泄露学生基础档案
         whereClause +=
-          ' AND id IN (SELECT student_id FROM teacher_student_relations WHERE teacher_id = ? AND status = "active")';
+          ' AND id IN (SELECT student_id FROM teacher_student_relations WHERE teacher_id = ? AND status = "accepted")';
         params.push(req.user.id);
       }
 
@@ -163,27 +164,23 @@ router.get(
 );
 
 // 🔴 核心修复：移除角色鉴权！允许已登录的所有用户访问此接口查询绑定的导师
-router.get(
-  "/my-teacher",
-  authenticate,
-  async (req, res) => {
-    try {
-      const [teachers] = await pool.execute(
-        `SELECT u.id, u.username, u.real_name, u.avatar_url, u.email,
+router.get("/my-teacher", authenticate, async (req, res) => {
+  try {
+    const [teachers] = await pool.execute(
+      `SELECT u.id, u.username, u.real_name, u.avatar_url, u.email,
               tsr.status as relation_status
        FROM users u
        JOIN teacher_student_relations tsr ON u.id = tsr.teacher_id
-       WHERE tsr.student_id = ? AND tsr.status = 'active' AND u.deleted_at IS NULL`,
-        [req.user.id],
-      );
+       WHERE tsr.student_id = ? AND tsr.status = 'accepted' AND u.deleted_at IS NULL`,
+      [req.user.id],
+    );
 
-      res.json({ teachers: teachers[0] || null });
-    } catch (error) {
-      logger.error("获取导师信息失败:", error);
-      res.status(500).json({ error: "获取导师信息失败" });
-    }
-  },
-);
+    res.json({ teachers: teachers[0] || null });
+  } catch (error) {
+    logger.error("获取导师信息失败:", error);
+    res.status(500).json({ error: "获取导师信息失败" });
+  }
+});
 
 // ==================== 2. 操作类 POST 路由 ====================
 
@@ -240,11 +237,9 @@ router.post(
       }
 
       if (students.length > 1) {
-        return res
-          .status(400)
-          .json({
-            error: "存在同名学生，请让学生提供精确的【登录账号】进行绑定",
-          });
+        return res.status(400).json({
+          error: "存在同名学生，请让学生提供精确的【登录账号】进行绑定",
+        });
       }
 
       const studentId = students[0].id;
@@ -470,5 +465,55 @@ router.put(
     }
   },
 );
+
+// 🔴 核心功能补齐：学生拉取所有向其发起认领、等待其确认的导师申请列表
+router.get("/pending-teachers", authenticate, async (req, res) => {
+  try {
+    const [invitations] = await pool.execute(
+      `SELECT tsr.id as relation_id, tsr.status, tsr.created_at,
+              u.id as teacher_id, u.username, u.real_name, u.email, u.avatar_url
+       FROM teacher_student_relations tsr
+       JOIN users u ON tsr.teacher_id = u.id
+       WHERE tsr.student_id = ? AND tsr.status = 'pending' AND u.deleted_at IS NULL`,
+      [req.user.id]
+    );
+    res.json({ invitations });
+  } catch (error) {
+    logger.error("获取导师申请列表失败:", error);
+    res.status(500).json({ error: "拉取数据失败" });
+  }
+});
+
+// 🔴 核心功能补齐：撤回申请 / 导师移除学生 / 学生反解导师 统一控制节点
+router.delete("/relations/:relationId", authenticate, async (req, res) => {
+  try {
+    const relationId = req.params.relationId;
+    const userId = req.user.id;
+
+    const [relations] = await pool.execute(
+      "SELECT * FROM teacher_student_relations WHERE id = ?",
+      [relationId]
+    );
+
+    if (relations.length === 0) {
+      return res.status(404).json({ error: "关系记录或申请不存在" });
+    }
+
+    const relation = relations[0];
+
+    // 鉴权安全拦截：只有当事导师或当事学生本人有权执行销毁
+    if (relation.teacher_id !== userId && relation.student_id !== userId) {
+      return res.status(403).json({ error: "越权访问：无权操作此关联关系" });
+    }
+
+    await pool.execute("DELETE FROM teacher_student_relations WHERE id = ?", [relationId]);
+    
+    logger.info(`师生防线数据解除: id=${relationId}, 操作者=${userId}`);
+    res.json({ message: relation.status === 'pending' ? "申请已成功撤回" : "师生绑定关系已解除" });
+  } catch (error) {
+    logger.error("操作师生关系链失败:", error);
+    res.status(500).json({ error: "服务器内部异常" });
+  }
+});
 
 module.exports = router;
