@@ -36,7 +36,8 @@ app.use(cors({
 // 限流配置
 const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15分钟
-  max: 100, // 100次请求
+  // 🔴 核心修复：开发环境下将限流上限放大至 10000 次，防止容器内虚拟网桥 IP 遭遇全局误杀
+  max: process.env.NODE_ENV === 'development' ? 10000 : 100,
   message: { error: '请求过于频繁，请稍后再试' },
   standardHeaders: true,
   legacyHeaders: false,

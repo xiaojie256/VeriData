@@ -291,8 +291,14 @@ router.post(
     try {
       const { id_card_number } = req.body;
 
-      if (!id_card_number || id_card_number.length < 15 || id_card_number.length > 18) {
-        return res.status(400).json({ error: "请输入有效的身份证号码（15或18位）" });
+      if (
+        !id_card_number ||
+        id_card_number.length < 15 ||
+        id_card_number.length > 18
+      ) {
+        return res
+          .status(400)
+          .json({ error: "请输入有效的身份证号码（15或18位）" });
       }
 
       const frontFile = req.files?.id_card_front?.[0];
@@ -383,63 +389,76 @@ router.put("/me", authenticate, async (req, res) => {
 });
 
 // 🔴 新增接口：学生同意/拒绝导师的认领申请
-router.put('/relations/:relationId', authenticate, authorize('student'), async (req, res) => {
-  try {
-    const { action } = req.body; // 'accept' 或 'reject'
-    const relationId = req.params.relationId;
+router.put(
+  "/relations/:relationId",
+  authenticate,
+  authorize("student"),
+  async (req, res) => {
+    try {
+      const { action } = req.body; // 'accept' 或 'reject'
+      const relationId = req.params.relationId;
 
-    if (!['accept', 'reject'].includes(action)) {
-      return res.status(400).json({ error: '操作类型无效，只支持accept或reject' });
-    }
+      if (!["accept", "reject"].includes(action)) {
+        return res
+          .status(400)
+          .json({ error: "操作类型无效，只支持accept或reject" });
+      }
 
-    // 验证关系记录是否存在且属于当前学生
-    const [relations] = await pool.execute(
-      'SELECT id, teacher_id, student_id FROM teacher_student_relations WHERE id = ? AND student_id = ?',
-      [relationId, req.user.id]
-    );
-
-    if (relations.length === 0) {
-      return res.status(404).json({ error: '申请记录不存在' });
-    }
-
-    const relation = relations[0];
-
-    if (action === 'accept') {
-      await pool.execute(
-        'UPDATE teacher_student_relations SET status = "accepted" WHERE id = ?',
-        [relationId]
+      // 验证关系记录是否存在且属于当前学生
+      const [relations] = await pool.execute(
+        "SELECT id, teacher_id, student_id FROM teacher_student_relations WHERE id = ? AND student_id = ?",
+        [relationId, req.user.id],
       );
 
-      // 通知导师已接受
-      await pool.execute(
-        `INSERT INTO notifications (user_id, type, title, content)
+      if (relations.length === 0) {
+        return res.status(404).json({ error: "申请记录不存在" });
+      }
+
+      const relation = relations[0];
+
+      if (action === "accept") {
+        await pool.execute(
+          'UPDATE teacher_student_relations SET status = "accepted" WHERE id = ?',
+          [relationId],
+        );
+
+        // 通知导师已接受
+        await pool.execute(
+          `INSERT INTO notifications (user_id, type, title, content)
        VALUES (?, 'system', '学生已确认', ?)`,
-        [relation.teacher_id, `学生 ${req.user.real_name || req.user.username} 已接受您的导师邀请`]
-      );
+          [
+            relation.teacher_id,
+            `学生 ${req.user.real_name || req.user.username} 已接受您的导师邀请`,
+          ],
+        );
 
-      logger.info(`学生接受导师申请: relation_id=${relationId}`);
-      return res.json({ message: '已接受导师绑定邀请' });
-    } else {
-      // reject: 删除关系记录
-      await pool.execute(
-        'DELETE FROM teacher_student_relations WHERE id = ?',
-        [relationId]
-      );
+        logger.info(`学生接受导师申请: relation_id=${relationId}`);
+        return res.json({ message: "已接受导师绑定邀请" });
+      } else {
+        // reject: 删除关系记录
+        await pool.execute(
+          "DELETE FROM teacher_student_relations WHERE id = ?",
+          [relationId],
+        );
 
-      // 通知导师已拒绝
-      await pool.execute(
-        `INSERT INTO notifications (user_id, type, title, content)
+        // 通知导师已拒绝
+        await pool.execute(
+          `INSERT INTO notifications (user_id, type, title, content)
        VALUES (?, 'system', '学生已拒绝', ?)`,
-        [relation.teacher_id, `学生 ${req.user.real_name || req.user.username} 已拒绝您的导师邀请`]
-      );
+          [
+            relation.teacher_id,
+            `学生 ${req.user.real_name || req.user.username} 已拒绝您的导师邀请`,
+          ],
+        );
 
-      logger.info(`学生拒绝导师申请: relation_id=${relationId}`);
-      return res.json({ message: '已拒绝该申请' });
+        logger.info(`学生拒绝导师申请: relation_id=${relationId}`);
+        return res.json({ message: "已拒绝该申请" });
+      }
+    } catch (error) {
+      logger.error("处理师生关系申请失败:", error);
+      res.status(500).json({ error: "处理申请失败" });
     }
-  } catch (error) {
-    logger.error('处理师生关系申请失败:', error);
-    res.status(500).json({ error: '处理申请失败' });
-  }
-});
+  },
+);
 
 module.exports = router;
