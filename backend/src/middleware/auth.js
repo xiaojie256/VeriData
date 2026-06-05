@@ -59,6 +59,11 @@ const authorize = (...roles) => {
       return res.status(403).json({ error: '没有权限执行此操作' });
     }
     
+    // 🔴 核心安全修复：强校验账号状态，非激活状态一律拦截
+    if (req.user.status !== 'active') {
+      return res.status(403).json({ error: '账号正在审核中，暂无权操作业务' });
+    }
+    
     next();
   };
 };
