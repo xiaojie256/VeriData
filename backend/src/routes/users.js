@@ -164,7 +164,7 @@ router.get(
 );
 
 // 🔴 核心修复：移除角色鉴权！允许已登录的所有用户访问此接口查询绑定的导师
-router.get("/my-teacher", authenticate, async (req, res) => {
+ router.get("/my-tutor", authenticate, async (req, res) => {
   try {
     const [teachers] = await pool.execute(
       `SELECT u.id, u.username, u.real_name, u.avatar_url, u.email,
@@ -255,7 +255,7 @@ router.post(
       }
 
       await pool.execute(
-        'INSERT INTO teacher_student_relations (teacher_id, student_id, status) VALUES (?, ?, "pending")',
+         'INSERT INTO teacher_student_relations (teacher_id, student_id, status) VALUES (?, ?, "pending_confirm")',
         [req.user.id, studentId],
       );
 
@@ -265,7 +265,7 @@ router.post(
        VALUES (?, 'system', '导师申请通知', ?)`,
         [
           studentId,
-          `导师 ${req.user.real_name || req.user.username} 申请将您添加为学生，请在学生中心确认`,
+           `导师 ${req.user.real_name || req.user.username} 申请将您添加为学生，请在"我的导师"选项卡界面中同意`,
         ],
       );
 
@@ -475,7 +475,7 @@ router.get("/pending-teachers", authenticate, async (req, res) => {
               u.id as teacher_id, u.username, u.real_name, u.email, u.avatar_url
        FROM teacher_student_relations tsr
        JOIN users u ON tsr.teacher_id = u.id
-       WHERE tsr.student_id = ? AND tsr.status = 'pending' AND u.deleted_at IS NULL`,
+       WHERE tsr.student_id = ? AND tsr.status = 'pending_confirm' AND u.deleted_at IS NULL`,
       [req.user.id],
     );
     res.json({ invitations });
@@ -514,7 +514,7 @@ router.delete("/relations/:relationId", authenticate, async (req, res) => {
     logger.info(`师生防线数据解除: id=${relationId}, 操作者=${userId}`);
     res.json({
       message:
-        relation.status === "pending" ? "申请已成功撤回" : "师生绑定关系已解除",
+        relation.status === "pending_confirm" ? "申请已成功撤回" : "师生绑定关系已解除",
     });
   } catch (error) {
     logger.error("操作师生关系链失败:", error);

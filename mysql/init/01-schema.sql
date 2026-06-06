@@ -42,7 +42,7 @@ CREATE TABLE teacher_student_relations (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   teacher_id BIGINT UNSIGNED NOT NULL,
   student_id BIGINT UNSIGNED NOT NULL,
-  status ENUM('active', 'inactive', 'pending') DEFAULT 'pending',
+   status ENUM('active', 'inactive', 'pending', 'pending_confirm') DEFAULT 'pending_confirm',
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   UNIQUE KEY unique_relation (teacher_id, student_id),
