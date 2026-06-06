@@ -107,8 +107,6 @@ import {
 } from '@element-plus/icons-vue'
 import Breadcrumb from '../components/Breadcrumb.vue'
 import { api } from '../store'
-import { api } from '../store'
-
 const route = useRoute()
 const router = useRouter()
 const store = useStore()
@@ -150,8 +148,6 @@ const handleCommand = (command) => {
 
 let pollTimer = null
 
-let pollTimer = null
-
 // 获取待审核数量
 const fetchPendingCount = async () => {
   try {
@@ -166,7 +162,7 @@ const fetchPendingCount = async () => {
 onMounted(() => {
   fetchPendingCount()
   // 定时刷新通知
-  pollTimer = pollTimer = setInterval(fetchPendingCount, 60000)
+  pollTimer = setInterval(fetchPendingCount, 60000)
 })
 
 onUnmounted(() => {
