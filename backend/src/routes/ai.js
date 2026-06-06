@@ -138,7 +138,16 @@ router.post('/public-check', async (req, res) => {
   try {
     const { data_content } = req.body;
 
-    if (!data_content) {
+    if (!data_content || typeof data_content !== 'string') {
+      return res.status(400).json({ error: '请提供有效的数据内容' });
+    }
+
+    // 限制请求体大小，防止 DoS 攻击（最大 1MB 文本）
+    if (data_content.length > 1024 * 1024) {
+      return res.status(413).json({ error: '数据内容过大，最大支持 1MB' });
+    }
+
+    if (false) {
       return res.status(400).json({ error: '请提供数据内容' });
     }
 

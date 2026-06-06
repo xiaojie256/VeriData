@@ -8,11 +8,14 @@ import numpy as np
 import requests  # 🔴 新增：用于将 Pandas 结构化中间体指标外包投喂给大模型
 
 # 配置日志
+log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
+os.makedirs(log_dir, exist_ok=True)
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('/app/logs/ai_service.log'),
+        logging.FileHandler(os.path.join(log_dir, 'ai_service.log')),
         logging.StreamHandler()
     ]
 )
@@ -299,7 +302,6 @@ class DataAnalyzer:
     def _get_llm_insight(self, analysis, score):
         """通过大模型获取语义审计意见"""
         try:
-            import os
             api_base = os.environ.get('MIMO_API_BASE', 'https://api.xiaomimimo.com/v1')
             api_key = os.environ.get('MIMO_API_KEY')
             model = os.environ.get('MIMO_MODEL', 'mimo-v2.5-flash')
@@ -352,7 +354,7 @@ class DataAnalyzer:
                     "temperature": 0.3,
                     "max_tokens": 500
                 },
-                timeout=10
+                timeout=30
             )
             
             if response.status_code == 200:
@@ -364,6 +366,11 @@ class DataAnalyzer:
             
         except requests.exceptions.Timeout:
             return "大模型服务响应超时，请重试。"
+        except requests.exceptions.ConnectionError:
+            return "大模型服务连接失败，请检查网络配置。"
+        except requests.exceptions.RequestException as e:
+            logger.error(f"大模型请求异常: {str(e)}")
+            return f"大模型请求异常：{str(e)}"
         except Exception as e:
             logger.error(f"大模型语义审计失败: {str(e)}")
             return f"大模型审计异常：{str(e)}"

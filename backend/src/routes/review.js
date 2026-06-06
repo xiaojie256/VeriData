@@ -13,7 +13,7 @@ router.get(
   authorize("teacher", "expert", "admin"),
   async (req, res) => {
     try {
-      const userId = req.user.id.toString();
+      const userId = req.user.id;
       const page = parseInt(req.query.page) || 1;
       const limit = parseInt(req.query.limit) || 10;
       const { review_type } = req.query;
@@ -24,10 +24,10 @@ router.get(
 
       // 导师只查看自己学生的数据
       if (req.user.role === "teacher") {
-        // 🔴 安全合规重构：必须 status = "active"（对方已同意）的正式学生，导师才有权审查其提交的数据
+        // 🔴 安全合规重构：必须 status = 'active'（对方已同意）的正式学生，导师才有权审查其提交的数据
         whereClause =
-          'AND d.submitter_id IN (SELECT student_id FROM teacher_student_relations WHERE teacher_id = ? AND status = "active")';
-        params.push(userId);
+          "AND d.submitter_id IN (SELECT student_id FROM teacher_student_relations WHERE teacher_id = ? AND status = 'active')";
+        params.push(req.user.id);
       } else if (req.user.role === "expert") {
         // 专家查看所有待盲审的数据（只能查看未分配或分配给自己的）
         whereClause = "AND (r.reviewer_id IS NULL OR r.reviewer_id = ?)";
@@ -67,7 +67,7 @@ router.get("/history", authenticate, async (req, res) => {
       return res.status(401).json({ error: "用户未认证" });
     }
 
-    const userId = req.user.id.toString();
+    const userId = req.user.id;
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const offset = (page - 1) * limit;
@@ -369,9 +369,14 @@ router.get(
       }
 
       // 🔴 核心修复：执行反序列化对齐前端命名空间，并追加大模型智能意见字段
-      const rawResult = dataList[0].ai_check_result
-        ? JSON.parse(dataList[0].ai_check_result)
-        : {};
+      let rawResult = {};
+      try {
+        rawResult = dataList[0].ai_check_result
+          ? JSON.parse(dataList[0].ai_check_result)
+          : {};
+      } catch (e) {
+        logger.error("解析AI检查结果失败:", e);
+      }
       res.json({
         score: dataList[0].ai_check_score,
         has_anomaly: dataList[0].ai_anomaly_detected === 1,

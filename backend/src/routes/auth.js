@@ -335,7 +335,7 @@ router.post('/reset-password', [
 
     // 2. 检查账号是否存在
     const [users] = await pool.execute('SELECT id FROM users WHERE email = ? AND deleted_at IS NULL', [email]);
-    if (users.length === 0) return res.status(444).json({ error: '该邮箱尚未注册任何账号' });
+    if (users.length === 0) return res.status(404).json({ error: '该邮箱尚未注册任何账号' });
 
     // 3. 加密并重写密码
     const newPasswordHash = await bcrypt.hash(newPassword, 10);

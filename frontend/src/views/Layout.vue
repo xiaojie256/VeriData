@@ -97,7 +97,7 @@
 </template>
 
 <script setup>
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useStore } from 'vuex'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -106,6 +106,8 @@ import {
   Bell, UserFilled, ArrowDown 
 } from '@element-plus/icons-vue'
 import Breadcrumb from '../components/Breadcrumb.vue'
+import { api } from '../store'
+import { api } from '../store'
 
 const route = useRoute()
 const router = useRouter()
@@ -146,20 +148,32 @@ const handleCommand = (command) => {
   }
 }
 
+let pollTimer = null
+
+let pollTimer = null
+
 // 获取待审核数量
 const fetchPendingCount = async () => {
   try {
-    const response = await store.dispatch('fetchNotifications')
-    // 这里可以添加获取待审核数量的逻辑
+    // 仅获取未读通知计数，避免每次轮询都拉取完整通知列表
+    const response = await api.get('/users/notifications/list?unread_only=true&limit=1')
+    store.commit('SET_UNREAD_COUNT', response.unread_count || 0)
   } catch (error) {
-    console.error('获取通知失败:', error)
+    // 静默失败，避免频繁弹窗干扰用户
   }
 }
 
 onMounted(() => {
   fetchPendingCount()
   // 定时刷新通知
-  setInterval(fetchPendingCount, 60000)
+  pollTimer = pollTimer = setInterval(fetchPendingCount, 60000)
+})
+
+onUnmounted(() => {
+  if (pollTimer) {
+    clearInterval(pollTimer)
+    pollTimer = null
+  }
 })
 </script>
 

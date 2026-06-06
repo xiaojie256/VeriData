@@ -307,19 +307,17 @@ const fetchData = async () => {
       teacher.value = null
     }
 
-    // 获取最近数据
-    const dataResponse = await api.get('/data/my?page=1&limit=5')
+    // 并行获取所有统计数据，减少串行等待时间
+    const [dataResponse, statsResponse, approvedRes, pendingRes] = await Promise.all([
+      api.get('/data/my?page=1&limit=5'),
+      api.get('/data/my?page=1&limit=1'),
+      api.get('/data/my?status=final_approved'),
+      api.get('/data/my?status=submitted')
+    ])
+
     recentData.value = dataResponse.data
-    
-    // 获取统计
-    const statsResponse = await api.get('/data/my?page=1&limit=1')
     stats.value.myData = statsResponse.pagination.total
-    
-    // 计算各状态数量
-    const approvedRes = await api.get('/data/my?status=final_approved')
     stats.value.approved = approvedRes.pagination.total
-    
-    const pendingRes = await api.get('/data/my?status=submitted')
     stats.value.pending = pendingRes.pagination.total
   } catch (error) {
     ElMessage.error('获取数据失败')

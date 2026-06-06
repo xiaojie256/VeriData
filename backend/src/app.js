@@ -36,7 +36,7 @@ app.use(
   cors({
     origin:
       process.env.NODE_ENV === "production"
-        ? ["http://localhost", "https://veri-data.edu.cn"]
+        ? ["https://veri-data.edu.cn"]
         : "*",
     credentials: true,
   }),

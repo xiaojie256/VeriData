@@ -145,7 +145,7 @@ router.get('/my', authenticate, async (req, res) => {
     const { status } = req.query;
     const offset = (page - 1) * limit;
 
-    const userId = req.user.id.toString();
+    const userId = req.user.id;
     
     let query = `SELECT id, title, description, data_type, data_format, file_size, 
                         visibility, review_status, review_progress, ai_check_status, ai_check_score,
@@ -208,12 +208,22 @@ router.get('/:id', authenticate, auditLog('data', 'view'), async (req, res) => {
     const data = dataList[0];
 
     // 修正：只有最终终审通过(final_approved)的公开数据才允许全员免签查看
-    const hasPermission =
+    let hasPermission =
       data.submitter_id === req.user.id ||
       (data.visibility === 'public' && data.review_status === 'final_approved') ||
-      req.user.role === 'admin' ||
-      (data.visibility === 'limited' && data.view_permission && 
-       JSON.parse(data.view_permission).includes(req.user.id)); // 在权限列表中
+      req.user.role === 'admin';
+    
+    // 检查limited权限
+    if (data.visibility === 'limited' && data.view_permission) {
+      try {
+        const permissionList = JSON.parse(data.view_permission);
+        if (permissionList.includes(req.user.id)) {
+          hasPermission = true;
+        }
+      } catch (e) {
+        logger.error("解析view_permission失败:", e);
+      }
+    }
 
     if (!hasPermission) {
       return res.status(403).json({ error: '无权查看此数据' });
@@ -250,12 +260,22 @@ router.get('/:id/download', authenticate, auditLog('data', 'download'), async (r
     const data = dataList[0];
 
     // 权限检查
-    const hasPermission = 
+    let hasPermission = 
       data.submitter_id === req.user.id ||
       data.visibility === 'public' ||
-      req.user.role === 'admin' ||
-      (data.visibility === 'limited' && data.view_permission && 
-       JSON.parse(data.view_permission).includes(req.user.id));
+      req.user.role === 'admin';
+    
+    // 检查limited权限
+    if (data.visibility === 'limited' && data.view_permission) {
+      try {
+        const permissionList = JSON.parse(data.view_permission);
+        if (permissionList.includes(req.user.id)) {
+          hasPermission = true;
+        }
+      } catch (e) {
+        logger.error("解析view_permission失败:", e);
+      }
+    }
 
     if (!hasPermission) {
       return res.status(403).json({ error: '无权下载此数据' });
@@ -290,6 +310,11 @@ router.post('/:id/submit', authenticate, authorize('student', 'teacher'), auditL
   try {
     const dataId = req.params.id;
     const { teacher_id, liability_accepted } = req.body;
+
+    // 验证 teacher_id 参数有效性
+    if (!teacher_id || isNaN(Number(teacher_id))) {
+      return res.status(400).json({ error: '请指定有效的导师' });
+    }
 
     // 验证数据所有权
     const [dataList] = await pool.execute(
