@@ -30,19 +30,11 @@ async function checkMySQL() {
  */
 async function checkRedis() {
   try {
-    // 使用 Redis ping 命令
-    await new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error('Redis连接超时'));
-      }, HEALTH_CHECK_TIMEOUT);
-      
-      redis.ping((err, result) => {
-        clearTimeout(timeout);
-        if (err) reject(err);
-        else resolve(result);
-      });
-    });
-    
+    // 使用 Redis v4 Promise API ping 命令
+    await Promise.race([
+      redis.ping(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Redis连接超时')), HEALTH_CHECK_TIMEOUT))
+    ]);
     return { status: 'up', responseTime: 'ok' };
   } catch (error) {
     logger.error('Redis健康检查失败:', error);
