@@ -83,7 +83,7 @@ const pendingTeachers = ref([])
 
 const fetchTeacherData = async () => {
   try {
-    const response = await api.get('/users/my-teacher')
+    const response = await api.get('/users/my-tutor')
     teacher.value = response.teachers
 
     const pendingRes = await api.get('/users/pending-teachers')

@@ -32,7 +32,7 @@ router.get(
       if (req.user.role === "teacher") {
         // 🔴 安全重构：将 "active" 修正为 "accepted"，防止 pending 状态下泄露学生基础档案
         whereClause +=
-          ' AND id IN (SELECT student_id FROM teacher_student_relations WHERE teacher_id = ? AND status = "accepted")';
+          ' AND id IN (SELECT student_id FROM teacher_student_relations WHERE teacher_id = ? AND status = "active")';
         params.push(req.user.id);
       }
 
