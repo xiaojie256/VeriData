@@ -182,6 +182,24 @@ router.get(
   }
 });
 
+// 🔴 路由顺序修正：将静态常量路由置于动态路由 /:id 之前，防止请求被拦截
+router.get("/pending-teachers", authenticate, async (req, res) => {
+  try {
+    const [invitations] = await pool.execute(
+      `SELECT tsr.id as relation_id, tsr.status, tsr.created_at,
+              u.id as teacher_id, u.username, u.real_name, u.email, u.avatar_url
+       FROM teacher_student_relations tsr
+       JOIN users u ON tsr.teacher_id = u.id
+       WHERE tsr.student_id = ? AND tsr.status = 'pending_confirm' AND u.deleted_at IS NULL`,
+      [req.user.id],
+    );
+    res.json({ invitations });
+  } catch (error) {
+    logger.error("获取导师申请列表失败:", error);
+    res.status(500).json({ error: "拉取数据失败" });
+  }
+});
+
 // ==================== 2. 操作类 POST 路由 ====================
 
 // 标记通知已读
@@ -467,23 +485,6 @@ router.put(
   },
 );
 
-// 🔴 核心功能补齐：学生拉取所有向其发起认领、等待其确认的导师申请列表
-router.get("/pending-teachers", authenticate, async (req, res) => {
-  try {
-    const [invitations] = await pool.execute(
-      `SELECT tsr.id as relation_id, tsr.status, tsr.created_at,
-              u.id as teacher_id, u.username, u.real_name, u.email, u.avatar_url
-       FROM teacher_student_relations tsr
-       JOIN users u ON tsr.teacher_id = u.id
-       WHERE tsr.student_id = ? AND tsr.status = 'pending_confirm' AND u.deleted_at IS NULL`,
-      [req.user.id],
-    );
-    res.json({ invitations });
-  } catch (error) {
-    logger.error("获取导师申请列表失败:", error);
-    res.status(500).json({ error: "拉取数据失败" });
-  }
-});
 
 // 🔴 核心功能补齐：撤回申请 / 导师移除学生 / 学生反解导师 统一控制节点
 router.delete("/relations/:relationId", authenticate, async (req, res) => {

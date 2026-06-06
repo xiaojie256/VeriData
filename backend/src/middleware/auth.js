@@ -21,7 +21,7 @@ const authenticate = async (req, res, next) => {
 
     // 查询用户信息
     const [users] = await pool.execute(
-      "SELECT id, username, email, role, real_name, avatar_url, status, quota_total, quota_used FROM users WHERE id = ? AND deleted_at IS NULL",
+      "SELECT id, username, email, role, real_name, avatar_url, status, id_verified, quota_total, quota_used FROM users WHERE id = ? AND deleted_at IS NULL",
       [decoded.userId],
     );
 
@@ -60,7 +60,7 @@ const authorize = (...roles) => {
     }
 
     // 🔴 核心安全修复：强校验账号状态，非激活状态一律拦截
-    if (req.user.status !== "active") {
+    if (req.user.status !== "active" && req.user.id_verified !== 1) {
       return res.status(403).json({ error: "账号正在审核中，暂无权操作业务" });
     }
 
