@@ -55,3 +55,4 @@ coverage/
 *.temp
 .cache/
 temp/
+.tmp.driveupload/
