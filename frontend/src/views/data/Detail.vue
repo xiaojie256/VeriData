@@ -159,6 +159,28 @@
       </el-col>
     </el-row>
   </div>
+
+
+    <!-- 提交审核对话框 -->
+    <el-dialog v-model="submitDialogVisible" title="提交审核" width="480px" :close-on-click-modal="false">
+      <div v-if="teacher">
+        <p style="margin-bottom: 16px;">将提交给您的导师进行一审审核：</p>
+        <el-descriptions :column="1" border>
+          <el-descriptions-item label="导师姓名">{{ teacher.real_name || teacher.username }}</el-descriptions-item>
+          <el-descriptions-item label="邮箱">{{ teacher.email }}</el-descriptions-item>
+        </el-descriptions>
+      </div>
+      <el-empty v-else-if="!teacherLoading" description="您尚未绑定导师，请先在‘我的导师’页面绑定导师后再提交审核">
+        <el-button type="primary" @click="$router.push('/settings/tutor')">去绑定导师</el-button>
+      </el-empty>
+      <div v-else v-loading="true" style="height: 80px;"></div>
+      <template #footer>
+        <el-button @click="submitDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="submitLoading" :disabled="!teacher" @click="submitReview">
+          确认提交
+        </el-button>
+      </template>
+    </el-dialog>
 </template>
 
 <script setup>
@@ -174,6 +196,10 @@ const router = useRouter()
 const data = ref(null)
 const aiResult = ref(null)
 const reviewRecords = ref([])
+const submitDialogVisible = ref(false)
+const teacher = ref(null)
+const teacherLoading = ref(false)
+const submitLoading = ref(false)
 
 const statusMap = {
   'draft': '草稿',
@@ -320,8 +346,38 @@ const downloadData = () => {
   window.open(`/api/data/${route.params.id}/download?token=${token}`, '_blank')
 }
 
-const showSubmitDialog = () => {
-  // 显示提交审核对话框
+const showSubmitDialog = async () => {
+  submitDialogVisible.value = true
+  teacherLoading.value = true
+  try {
+    const response = await api.get('/users/my-tutor')
+    teacher.value = response.teachers
+  } catch (err) {
+    console.error('获取导师信息失败', err)
+  } finally {
+    teacherLoading.value = false
+  }
+}
+
+const submitReview = async () => {
+  if (!teacher.value) {
+    ElMessage.warning('请先绑定导师')
+    return
+  }
+  submitLoading.value = true
+  try {
+    await api.post(`/data/${route.params.id}/submit`, {
+      teacher_id: teacher.value.id,
+      liability_accepted: true
+    })
+    ElMessage.success('提交审核成功')
+    submitDialogVisible.value = false
+    await fetchData()
+  } catch (err) {
+    ElMessage.error(err?.error || '提交审核失败')
+  } finally {
+    submitLoading.value = false
+  }
 }
 
 onMounted(() => {
