@@ -21,6 +21,7 @@ const {
   performReadinessCheck,
   performLivenessCheck,
 } = require("./utils/healthCheck");
+const { runMigrations } = require("./utils/migration");
 
 const app = express();
 app.set("trust proxy", 1);
@@ -247,6 +248,10 @@ const server = app.listen(PORT, () => {
   logger.info(`API版本: ${API_VERSION}`);
   logger.info(`API前缀: ${API_PREFIX}`);
   logger.info(`========================================`);
+  // Run database migrations on startup (idempotent)
+  runMigrations().catch((err) => {
+    logger.error("Startup migration failed:", err.message);
+  });
 });
 
 // 优雅关闭
