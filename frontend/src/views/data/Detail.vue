@@ -170,8 +170,11 @@
           <el-descriptions-item label="邮箱">{{ teacher.email }}</el-descriptions-item>
         </el-descriptions>
       </div>
-      <el-empty v-else-if="!teacherLoading" description="您尚未绑定导师，请先在‘我的导师’页面绑定导师后再提交审核">
-        <el-button type="primary" @click="$router.push('/settings/tutor')">去绑定导师</el-button>
+      <el-empty v-else-if="!teacherLoading" description="您尚未绑定导师，请先在’我的导师’页面绑定导师后再提交审核">
+        <div style="display: flex; gap: 10px; justify-content: center;">
+          <el-button type="primary" @click="$router.push(‘/teacher’)">去绑定导师</el-button>
+          <el-button @click="showSubmitDialog">重新加载</el-button>
+        </div>
       </el-empty>
       <div v-else v-loading="true" style="height: 80px;"></div>
       <template #footer>
@@ -347,21 +350,24 @@ const downloadData = () => {
 }
 
 const showSubmitDialog = async () => {
-  submitDialogVisible.value = true
   teacherLoading.value = true
+  submitDialogVisible.value = true
+  teacher.value = null
   try {
     const response = await api.get('/users/my-tutor')
     teacher.value = response.teachers
   } catch (err) {
     console.error('获取导师信息失败', err)
+    ElMessage.error('获取导师信息失败，请检查网络连接后重试')
+    submitDialogVisible.value = false
   } finally {
     teacherLoading.value = false
   }
 }
 
 const submitReview = async () => {
-  if (!teacher.value) {
-    ElMessage.warning('请先绑定导师')
+  if (!teacher.value || !teacher.value.id) {
+    ElMessage.warning('无法提交：未成功加载导师信息，请先前往"我的导师"页面完成绑定')
     return
   }
   submitLoading.value = true
@@ -370,11 +376,12 @@ const submitReview = async () => {
       teacher_id: teacher.value.id,
       liability_accepted: true
     })
-    ElMessage.success('提交审核成功')
+    ElMessage.success('提交审核成功，已进入AI检测与导师一审环节')
     submitDialogVisible.value = false
     await fetchData()
   } catch (err) {
-    ElMessage.error(err?.error || '提交审核失败')
+    const msg = err?.error || '提交审核失败，请稍后重试'
+    ElMessage.error(msg)
   } finally {
     submitLoading.value = false
   }
