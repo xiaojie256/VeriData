@@ -293,17 +293,17 @@ const submitReview = async (row) => {
 
   // 3. 学生角色维持原状，去请求属于自己的导师
   try {
-    const response = await api.get('/users/my-teacher')
+    const response = await api.get('/users/my-tutor')
     if (response.teachers) {
       teachers.value = [response.teachers]
       submitForm.teacher_id = response.teachers.id
     } else {
-      ElMessage.warning('您还没有关联导师，请先添加导师')
+      ElMessage.warning('您尚未绑定导师，请先前往"我的导师"页面完成绑定后再提交')
       return
     }
     submitDialogVisible.value = true
   } catch (error) {
-    ElMessage.error('获取导师信息失败')
+    ElMessage.error('获取导师信息失败，请检查网络连接或刷新页面重试')
   }
 }
 
