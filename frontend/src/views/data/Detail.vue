@@ -158,8 +158,6 @@
         </el-card>
       </el-col>
     </el-row>
-  </div>
-
 
     <!-- 提交审核对话框 -->
     <el-dialog v-model="submitDialogVisible" title="提交审核" width="480px" :close-on-click-modal="false">
@@ -170,9 +168,9 @@
           <el-descriptions-item label="邮箱">{{ teacher.email }}</el-descriptions-item>
         </el-descriptions>
       </div>
-      <el-empty v-else-if="!teacherLoading" description="您尚未绑定导师，请先在’我的导师’页面绑定导师后再提交审核">
+      <el-empty v-else-if="!teacherLoading" description="您尚未绑定导师，请先在'我的导师'页面绑定导师后再提交审核">
         <div style="display: flex; gap: 10px; justify-content: center;">
-          <el-button type="primary" @click="$router.push(‘/teacher’)">去绑定导师</el-button>
+          <el-button type="primary" @click="$router.push('/teacher')">去绑定导师</el-button>
           <el-button @click="showSubmitDialog">重新加载</el-button>
         </div>
       </el-empty>
@@ -184,6 +182,7 @@
         </el-button>
       </template>
     </el-dialog>
+  </div>
 </template>
 
 <script setup>
@@ -449,4 +448,4 @@ onMounted(() => {
 }
 
 .review-steps {
-  min-height: 400px;
+  min-height: 400px; 
