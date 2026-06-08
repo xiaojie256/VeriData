@@ -35,8 +35,9 @@ services:
       dockerfile: Dockerfile
     container_name: veri-data-backend
     restart: unless-stopped
+    command: npm run dev
     environment:
-      NODE_ENV: production
+      NODE_ENV: development
       DB_HOST: mysql
       DB_PORT: 3306
       DB_USER: root
@@ -51,6 +52,7 @@ services:
     ports:
       - "3000:3000"
     volumes:
+      - ./backend/src:/app/src
       - ./uploads:/app/uploads
       - ./logs:/app/logs
     depends_on:
