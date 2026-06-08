@@ -449,3 +449,5 @@ onMounted(() => {
 
 .review-steps {
   min-height: 400px;
+}
+</style>
