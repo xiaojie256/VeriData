@@ -300,7 +300,7 @@ const fetchData = async () => {
 
     // 🔴 获取已绑定的导师
     try {
-      const teacherRes = await api.get('/users/my-teacher')
+      const teacherRes = await api.get('/users/my-tutor')
       teacher.value = teacherRes.teachers || null
     } catch (e) {
       // 接口不存在或无权，忽略
@@ -393,3 +393,4 @@ onMounted(() => {
   align-items: center;
 }
 </style>
+  

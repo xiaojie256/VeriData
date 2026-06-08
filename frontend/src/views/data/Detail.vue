@@ -355,11 +355,14 @@ const showSubmitDialog = async () => {
   teacher.value = null
   try {
     const response = await api.get('/users/my-tutor')
-    teacher.value = response.teachers
+    if (response.teachers) {
+      teacher.value = response.teachers
+    } else {
+      ElMessage.warning('您尚未绑定导师，请先前往"我的导师"页面完成绑定后再提交')
+    }
   } catch (err) {
     console.error('获取导师信息失败', err)
-    ElMessage.error('获取导师信息失败，请检查网络连接后重试')
-    submitDialogVisible.value = false
+    ElMessage.warning('获取导师信息失败，请稍后重试')
   } finally {
     teacherLoading.value = false
   }
@@ -447,15 +450,3 @@ onMounted(() => {
 
 .review-steps {
   min-height: 400px;
-}
-
-.time {
-  color: #909399;
-  font-size: 13px;
-  margin-top: 5px;
-}
-
-.w-full {
-  width: 100%;
-}
-</style>

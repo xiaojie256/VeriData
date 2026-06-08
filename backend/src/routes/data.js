@@ -330,14 +330,24 @@ router.post('/:id/submit', authenticate, authorize('student', 'teacher'), auditL
       return res.status(403).json({ error: '无权操作此数据' });
     }
 
+    // 允许提交的状态：draft（首次提交）或被拒绝后重新提交
+    const allowedStatuses = ['draft', 'teacher_rejected', 'expert_rejected', 'final_rejected'];
+    if (!allowedStatuses.includes(dataList[0].review_status)) {
+      return res.status(400).json({ error: '该数据当前状态不允许提交审核' });
+    }
+
+    // 如果是重新提交（被拒绝后），清除旧的待处理审核记录
     if (dataList[0].review_status !== 'draft') {
-      return res.status(400).json({ error: '该数据已提交审核，无法重复提交' });
+      await pool.execute(
+        `DELETE FROM review_records WHERE data_id = ? AND status = 'pending'`,
+        [dataId]
+      );
     }
 
     // 更新状态
     await pool.execute(
-      `UPDATE data_submissions 
-       SET review_status = 'submitted', submitted_at = NOW(), 
+      `UPDATE data_submissions
+       SET review_status = 'submitted', submitted_at = NOW(),
            is_liability_accepted = ?, review_progress = 10
        WHERE id = ?`,
       [liability_accepted ? 1 : 0, dataId]
@@ -357,7 +367,7 @@ router.post('/:id/submit', authenticate, authorize('student', 'teacher'), auditL
       [teacher_id, `学生${req.user.real_name || req.user.username}提交了数据《${dataList[0].title}》等待您审核`, dataId]
     );
 
-    logger.info(`数据提交审核: data_id=${dataId}`);
+    logger.info(`数据提交审核: data_id=${dataId}, status=${dataList[0].review_status}`);
 
     res.json({ message: '提交审核成功' });
   } catch (error) {
@@ -418,23 +428,4 @@ router.delete('/:id', authenticate, async (req, res) => {
       return res.status(404).json({ error: '数据不存在' });
     }
 
-    if (dataList[0].submitter_id !== req.user.id && req.user.role !== 'admin') {
-      return res.status(403).json({ error: '无权删除此数据' });
-    }
-
-    // 软删除
-    await pool.execute(
-      'UPDATE data_submissions SET deleted_at = NOW() WHERE id = ?',
-      [dataId]
-    );
-
-    logger.info(`数据已删除: data_id=${dataId}`);
-
-    res.json({ message: '删除成功' });
-  } catch (error) {
-    logger.error('删除数据失败:', error);
-    res.status(500).json({ error: '删除失败' });
-  }
-});
-
-module.exports = router;
+    if (dataList[0].submitter_id !== req.user.id && req.user.

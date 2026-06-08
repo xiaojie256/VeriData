@@ -272,39 +272,45 @@ const viewDetail = (id) => {
 
 const submitReview = async (row) => {
   currentData.value = row
-  
-  // 1. 安全提取当前登录用户的角色，避免盲目请求
-  let userRole = 'student';
+
+  // 重置表单状态
+  submitForm.teacher_id = ''
+  submitForm.liability_accepted = false
+
+  // 1. 安全提取当前登录用户的角色
+  let userRole = 'student'
   try {
-    const user = JSON.parse(localStorage.getItem('user'));
-    userRole = user?.role || 'student';
+    const user = JSON.parse(localStorage.getItem('user'))
+    userRole = user?.role || 'student'
   } catch (e) {
-    console.error(e);
+    console.error(e)
   }
 
-  // 2. 如果不是学生（是教师、专家或管理员），跳过获取导师步骤，直接指派给系统默认审批人（ID 1 为系统内置管理员）
+  // 2. 非学生角色，直接指派给系统默认审批人
   if (userRole !== 'student') {
-    submitForm.teacher_id = 1; 
-    submitForm.liability_accepted = false;
-    teachers.value = [{ id: 1, real_name: '系统审查员（管理员）' }];
-    submitDialogVisible.value = true;
-    return;
+    submitForm.teacher_id = 1
+    teachers.value = [{ id: 1, real_name: '系统审查员（管理员）' }]
+    submitDialogVisible.value = true
+    return
   }
 
-  // 3. 学生角色维持原状，去请求属于自己的导师
+  // 3. 学生角色：获取导师列表
   try {
     const response = await api.get('/users/my-tutor')
     if (response.teachers) {
       teachers.value = [response.teachers]
       submitForm.teacher_id = response.teachers.id
     } else {
+      teachers.value = []
       ElMessage.warning('您尚未绑定导师，请先前往"我的导师"页面完成绑定后再提交')
       return
     }
-    submitDialogVisible.value = true
   } catch (error) {
-    ElMessage.error('获取导师信息失败，请检查网络连接或刷新页面重试')
+    // 获取导师失败时仍打开对话框，允许用户稍后重试
+    teachers.value = []
+    ElMessage.warning('获取导师信息失败，请稍后重试')
   }
+  submitDialogVisible.value = true
 }
 
 const confirmSubmit = async () => {
@@ -366,3 +372,4 @@ onMounted(() => {
   width: 100%;
 }
 </style>
+         
