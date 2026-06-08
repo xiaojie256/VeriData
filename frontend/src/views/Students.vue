@@ -112,8 +112,7 @@ const addStudent = async () => {
 }
 
 const viewStudentData = (row) => {
-  // 跳转到数据列表，筛选该学生的数据
-  router.push('/data/list')
+  router.push({ path: '/data/list', query: { student_id: row.id, student_name: row.real_name || row.username } })
 }
 
 // 🔴 移除学生或撤回申请
@@ -128,6 +127,3 @@ const handleTerminate = async (relationId) => {
 }
 
 onMounted(() => {
-  fetchStudents()
-})
-</script>

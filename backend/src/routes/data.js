@@ -132,6 +132,69 @@ router.post('/upload', authenticate, authorize('student', 'teacher', 'admin', 'c
   }
 });
 
+// 教师查看指定学生的数据列表
+router.get('/student/:studentId', authenticate, authorize('teacher', 'admin'), async (req, res) => {
+  try {
+    const studentId = req.params.studentId;
+    const teacherId = req.user.id;
+
+    // 验证师生关系（admin 跳过检查）
+    if (req.user.role !== 'admin') {
+      const [relations] = await pool.execute(
+        `SELECT id FROM teacher_student_relations
+         WHERE teacher_id = ? AND student_id = ? AND status = 'active'`,
+        [teacherId, studentId]
+      );
+      if (relations.length === 0) {
+        return res.status(403).json({ error: '无权查看该学生数据' });
+      }
+    }
+
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const { status } = req.query;
+    const offset = (page - 1) * limit;
+
+    let query = `SELECT id, title, description, data_type, data_format, file_size,
+                        visibility, review_status, review_progress, ai_check_status, ai_check_score,
+                        ai_anomaly_detected, version, citation_count, download_count,
+                        created_at, submitted_at, completed_at
+                 FROM data_submissions
+                 WHERE submitter_id = ? AND deleted_at IS NULL`;
+    let params = [studentId];
+
+    if (status) {
+      query += ' AND review_status = ?';
+      params.push(status);
+    }
+
+    query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
+    params.push(limit, offset);
+
+    const [data] = await pool.query(query, params);
+
+    let countQuery = 'SELECT COUNT(*) as total FROM data_submissions WHERE submitter_id = ? AND deleted_at IS NULL';
+    let countParams = [studentId];
+    if (status) {
+      countQuery += ' AND review_status = ?';
+      countParams.push(status);
+    }
+    const [countResult] = await pool.execute(countQuery, countParams);
+
+    res.json({
+      data,
+      pagination: {
+        page,
+        limit,
+        total: countResult[0].total
+      }
+    });
+  } catch (error) {
+    logger.error('获取学生数据列表失败:', error);
+    res.status(500).json({ error: '获取学生数据列表失败' });
+  }
+});
+
 // 获取我的数据列表
 router.get('/my', authenticate, async (req, res) => {
   try {
@@ -260,11 +323,23 @@ router.get('/:id/download', authenticate, auditLog('data', 'download'), async (r
     const data = dataList[0];
 
     // 权限检查
-    let hasPermission = 
+    let hasPermission =
       data.submitter_id === req.user.id ||
       data.visibility === 'public' ||
       req.user.role === 'admin';
-    
+
+    // 教师可以查看自己学生的数据
+    if (!hasPermission && req.user.role === 'teacher') {
+      const [relations] = await pool.execute(
+        `SELECT id FROM teacher_student_relations
+         WHERE teacher_id = ? AND student_id = ? AND status = 'active'`,
+        [req.user.id, data.submitter_id]
+      );
+      if (relations.length > 0) {
+        hasPermission = true;
+      }
+    }
+
     // 检查limited权限
     if (data.visibility === 'limited' && data.view_permission) {
       try {
@@ -355,77 +430,4 @@ router.post('/:id/submit', authenticate, authorize('student', 'teacher'), auditL
 
     // 创建审核记录（导师一审）
     await pool.execute(
-      `INSERT INTO review_records (data_id, reviewer_id, review_type, status, is_blind_review)
-       VALUES (?, ?, 'teacher', 'pending', 0)`,
-      [dataId, teacher_id]
-    );
-
-    // 发送通知
-    await pool.execute(
-      `INSERT INTO notifications (user_id, type, title, content, related_type, related_id)
-       VALUES (?, 'review', '新的数据审核请求', ?, 'data', ?)`,
-      [teacher_id, `学生${req.user.real_name || req.user.username}提交了数据《${dataList[0].title}》等待您审核`, dataId]
-    );
-
-    logger.info(`数据提交审核: data_id=${dataId}, status=${dataList[0].review_status}`);
-
-    res.json({ message: '提交审核成功' });
-  } catch (error) {
-    logger.error('提交审核失败:', error);
-    res.status(500).json({ error: '提交审核失败' });
-  }
-});
-
-// 更新数据信息
-router.put('/:id', authenticate, async (req, res) => {
-  try {
-    const dataId = req.params.id;
-    const { title, description, visibility } = req.body;
-
-    // 验证数据所有权
-    const [dataList] = await pool.execute(
-      'SELECT submitter_id, review_status FROM data_submissions WHERE id = ? AND deleted_at IS NULL',
-      [dataId]
-    );
-
-    if (dataList.length === 0) {
-      return res.status(404).json({ error: '数据不存在' });
-    }
-
-    if (dataList[0].submitter_id !== req.user.id && req.user.role !== 'admin') {
-      return res.status(403).json({ error: '无权操作此数据' });
-    }
-
-    // 只有草稿或已拒绝的数据可以修改
-    const editableStatuses = ['draft', 'teacher_rejected', 'expert_rejected', 'final_rejected'];
-    if (!editableStatuses.includes(dataList[0].review_status) && req.user.role !== 'admin') {
-      return res.status(400).json({ error: '当前状态下无法修改数据' });
-    }
-
-    await pool.execute(
-      'UPDATE data_submissions SET title = ?, description = ?, visibility = ? WHERE id = ?',
-      [title, description, visibility, dataId]
-    );
-
-    res.json({ message: '更新成功' });
-  } catch (error) {
-    logger.error('更新数据失败:', error);
-    res.status(500).json({ error: '更新失败' });
-  }
-});
-
-// 删除数据
-router.delete('/:id', authenticate, async (req, res) => {
-  try {
-    const dataId = req.params.id;
-
-    const [dataList] = await pool.execute(
-      'SELECT submitter_id, file_path FROM data_submissions WHERE id = ? AND deleted_at IS NULL',
-      [dataId]
-    );
-
-    if (dataList.length === 0) {
-      return res.status(404).json({ error: '数据不存在' });
-    }
-
-    if (dataList[0].submitter_id !== req.user.id && req.user.
+      `INSERT INTO revi

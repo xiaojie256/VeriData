@@ -1,11 +1,12 @@
 <template>
   <div class="page-container">
     <div class="page-header">
-      <h2 class="page-title">我的数据</h2>
-      <el-button type="primary" @click="$router.push('/data/upload')">
+      <h2 class="page-title">{{ isViewingStudent ? `${studentName} 的数据` : '我的数据' }}</h2>
+      <el-button v-if="!isViewingStudent" type="primary" @click="$router.push('/data/upload')">
         <el-icon><Plus /></el-icon>
         上传新数据
       </el-button>
+      <el-button v-if="isViewingStudent" @click="$router.back()">返回</el-button>
     </div>
     
     <!-- 筛选栏 -->
@@ -92,18 +93,18 @@
         <el-table-column label="操作" width="200" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="viewDetail(row.id)">查看</el-button>
-            <el-button 
-              v-if="canSubmit(row.review_status)" 
-              link 
-              type="success" 
+            <el-button
+              v-if="!isViewingStudent && canSubmit(row.review_status)"
+              link
+              type="success"
               @click="submitReview(row)"
             >
               提交审核
             </el-button>
-            <el-button 
-              v-if="canDelete(row.review_status)" 
-              link 
-              type="danger" 
+            <el-button
+              v-if="!isViewingStudent && canDelete(row.review_status)"
+              link
+              type="danger"
               @click="deleteData(row)"
             >
               删除
@@ -154,19 +155,25 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, reactive, onMounted, computed } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 import { api } from '../../store'
 
 const router = useRouter()
+const route = useRoute()
 const loading = ref(false)
 const dataList = ref([])
 const teachers = ref([])
 const submitDialogVisible = ref(false)
 const currentData = ref(null)
+
+// 是否为教师查看学生数据模式
+const studentId = computed(() => route.query.student_id)
+const studentName = computed(() => route.query.student_name || '学生')
+const isViewingStudent = computed(() => !!studentId.value)
 
 const filters = reactive({
   status: '',
@@ -232,10 +239,15 @@ const canDelete = (status) => ['draft', 'final_rejected'].includes(status)
 const fetchData = async () => {
   loading.value = true
   try {
-    let url = `/data/my?page=${pagination.page}&limit=${pagination.limit}`
+    let url
+    if (isViewingStudent.value) {
+      url = `/data/student/${studentId.value}?page=${pagination.page}&limit=${pagination.limit}`
+    } else {
+      url = `/data/my?page=${pagination.page}&limit=${pagination.limit}`
+    }
     if (filters.status) url += `&status=${filters.status}`
     if (filters.data_type) url += `&data_type=${filters.data_type}`
-    
+
     const response = await api.get(url)
     dataList.value = response.data
     pagination.total = response.pagination.total
@@ -337,39 +349,4 @@ const confirmSubmit = async () => {
 }
 
 const deleteData = (row) => {
-  ElMessageBox.confirm('确定要删除这条数据吗？此操作不可恢复。', '确认删除', {
-    confirmButtonText: '删除',
-    cancelButtonText: '取消',
-    type: 'warning'
-  }).then(async () => {
-    try {
-      await api.delete(`/data/${row.id}`)
-      ElMessage.success('删除成功')
-      fetchData()
-    } catch (error) {
-      ElMessage.error('删除失败')
-    }
-  })
-}
-
-onMounted(() => {
-  fetchData()
-})
-</script>
-
-<style scoped>
-.filter-card {
-  margin-bottom: 20px;
-}
-
-.pagination-container {
-  margin-top: 20px;
-  display: flex;
-  justify-content: flex-end;
-}
-
-.w-full {
-  width: 100%;
-}
-</style>
-         
+  
