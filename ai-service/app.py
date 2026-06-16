@@ -23,6 +23,47 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
+
+def make_json_safe(value):
+    """递归转换 Pandas / NumPy 类型，确保 Flask jsonify 可以正常序列化"""
+    if isinstance(value, dict):
+        return {
+            str(make_json_safe(key)): make_json_safe(item)
+            for key, item in value.items()
+        }
+
+    if isinstance(value, list):
+        return [make_json_safe(item) for item in value]
+
+    if isinstance(value, tuple):
+        return [make_json_safe(item) for item in value]
+
+    if isinstance(value, np.integer):
+        return int(value)
+
+    if isinstance(value, np.floating):
+        if np.isnan(value) or np.isinf(value):
+            return None
+        return float(value)
+
+    if isinstance(value, np.bool_):
+        return bool(value)
+
+    if isinstance(value, np.ndarray):
+        return make_json_safe(value.tolist())
+
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+
+    return value
+
+
 # AI检测核心类
 class DataAnalyzer:
     def __init__(self):
@@ -441,7 +482,11 @@ def analyze():
         
         logger.info(f"开始分析文件: {file_path}")
         result = analyzer.analyze_data(file_path, file_hash)
-        
+        result = make_json_safe(result)
+
+        if result.get('details', {}).get('error'):
+            return jsonify(result), 422
+
         return jsonify(result)
         
     except Exception as e:
@@ -459,7 +504,7 @@ def quick_check():
             return jsonify({'error': '请提供数据内容'}), 400
         
         result = analyzer.quick_check(content)
-        return jsonify(result)
+        return jsonify(make_json_safe(result))
         
     except Exception as e:
         logger.error(f"快速检测失败: {str(e)}")
@@ -493,11 +538,11 @@ def predict():
         if cols < 3:
             suggestions.append('建议增加数据维度')
         
-        return jsonify({
+        return jsonify(make_json_safe({
             'predicted_score': max(0, predicted_score),
             'confidence': 'medium',
             'suggestions': suggestions
-        })
+        }))
         
     except Exception as e:
         logger.error(f"预测失败: {str(e)}")
