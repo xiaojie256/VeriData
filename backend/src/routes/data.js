@@ -222,19 +222,19 @@ router.get('/my', authenticate, async (req, res) => {
     if (!req.user || !req.user.id) {
       return res.status(401).json({ error: '用户未认证' });
     }
-    
+
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const { status } = req.query;
     const offset = (page - 1) * limit;
 
     const userId = req.user.id;
-    
-    let query = `SELECT id, title, description, data_type, data_format, file_size, 
+
+    let query = `SELECT id, title, description, data_type, data_format, file_size,
                         visibility, review_status, review_progress, ai_check_status, ai_check_score,
                         ai_anomaly_detected, version, citation_count, download_count,
                         created_at, submitted_at, completed_at
-                 FROM data_submissions 
+                 FROM data_submissions
                  WHERE submitter_id = ? AND deleted_at IS NULL`;
     let params = [userId];
 
@@ -295,7 +295,7 @@ router.get('/:id', authenticate, auditLog('data', 'view'), async (req, res) => {
       data.submitter_id === req.user.id ||
       (data.visibility === 'public' && data.review_status === 'final_approved') ||
       req.user.role === 'admin';
-    
+
     // 检查limited权限
     if (data.visibility === 'limited' && data.view_permission) {
       try {
@@ -401,53 +401,162 @@ router.get('/:id/download', authenticate, auditLog('data', 'download'), async (r
 });
 
 // 提交审核
-router.post('/:id/submit', authenticate, authorize('student', 'teacher'), auditLog('data', 'create'), async (req, res) => {
+router.post(
+  '/:id/submit',
+  authenticate,
+  authorize('student', 'teacher'),
+  auditLog('data', 'create'),
+  async (req, res) => {
+    const connection = await pool.getConnection();
+
+    try {
+      const dataId = Number.parseInt(req.params.id, 10);
+      const teacherId = Number.parseInt(req.body.teacher_id, 10);
+      const liabilityAccepted = Boolean(req.body.liability_accepted);
+
+      if (!Number.isFinite(dataId) || dataId <= 0) {
+        return res.status(400).json({ error: '无效的数据ID' });
+      }
+
+      if (!Number.isFinite(teacherId) || teacherId <= 0) {
+        return res.status(400).json({ error: '请指定有效的导师' });
+      }
+
+      if (!liabilityAccepted) {
+        return res.status(400).json({ error: '提交审核前必须确认责任声明' });
+      }
+
+      await connection.beginTransaction();
+
+      const [dataList] = await connection.execute(
+        `SELECT id, submitter_id, title, review_status
+         FROM data_submissions
+         WHERE id = ? AND deleted_at IS NULL
+         FOR UPDATE`,
+        [dataId]
+      );
+
+      if (dataList.length === 0) {
+        await connection.rollback();
+        return res.status(404).json({ error: '数据不存在' });
+      }
+
+      const data = dataList[0];
+
+      if (data.submitter_id !== req.user.id) {
+        await connection.rollback();
+        return res.status(403).json({ error: '无权操作此数据' });
+      }
+
+      const allowedStatuses = ['draft', 'teacher_rejected', 'expert_rejected', 'final_rejected'];
+
+      if (!allowedStatuses.includes(data.review_status)) {
+        await connection.rollback();
+        return res.status(400).json({ error: '该数据当前状态不允许提交审核' });
+      }
+      const [teacherRows] = await connection.execute(
+        `SELECT id, status
+         FROM users
+         WHERE id = ?
+           AND role = 'teacher'
+           AND status = 'active'
+           AND deleted_at IS NULL`,
+        [teacherId]
+      );
+
+      if (teacherRows.length === 0) {
+        await connection.rollback();
+        return res.status(400).json({ error: '指定导师不存在或未通过身份验证' });
+      }
+
+      const [relations] = await connection.execute(
+        `SELECT id
+         FROM teacher_student_relations
+         WHERE teacher_id = ?
+           AND student_id = ?
+           AND status = 'active'`,
+        [teacherId, req.user.id]
+      );
+
+      if (relations.length === 0) {
+        await connection.rollback();
+        return res.status(403).json({ error: '只能提交给已确认绑定的导师审核' });
+      }
+
+      await connection.execute(
+        `DELETE FROM review_records
+         WHERE data_id = ? AND status = 'pending'`,
+        [dataId]
+      );
+
+      await connection.execute(
+        `UPDATE data_submissions
+         SET review_status = 'teacher_reviewing',
+             submitted_at = NOW(),
+             is_liability_accepted = 1,
+             review_progress = 10
+         WHERE id = ?`,
+        [dataId]
+      );
+
+      await connection.execute(
+        `INSERT INTO review_records
+           (data_id, reviewer_id, review_type, status, is_blind_review)
+         VALUES (?, ?, 'teacher', 'pending', 0)`,
+        [dataId, teacherId]
+      );
+
+      await connection.execute(
+        `INSERT INTO notifications (user_id, type, title, content, related_type, related_id)
+         VALUES (?, 'review', '新的导师审核任务', ?, 'data', ?)`,
+        [
+          teacherId,
+          `学生 ${req.user.real_name || req.user.username} 提交了数据《${data.title}》，请进行导师一审。`,
+          dataId
+        ]
+      );
+
+      await connection.commit();
+
+      res.json({
+        message: '数据已提交导师审核',
+        review_status: 'teacher_reviewing',
+        review_progress: 10
+      });
+    } catch (error) {
+      await connection.rollback();
+      logger.error('提交审核失败:', error);
+      res.status(500).json({ error: '提交审核失败' });
+    } finally {
+      connection.release();
+    }
+  }
+);
+
+// 删除数据
+router.delete('/:id', authenticate, auditLog('data', 'delete'), async (req, res) => {
   try {
     const dataId = req.params.id;
-    const { teacher_id, liability_accepted } = req.body;
-
-    // 验证 teacher_id 参数有效性
-    if (!teacher_id || isNaN(Number(teacher_id))) {
-      return res.status(400).json({ error: '请指定有效的导师' });
-    }
-
-    // 验证数据所有权
     const [dataList] = await pool.execute(
-      'SELECT submitter_id, review_status FROM data_submissions WHERE id = ? AND deleted_at IS NULL',
+      `SELECT id, submitter_id, review_status FROM data_submissions WHERE id = ? AND deleted_at IS NULL`,
       [dataId]
     );
-
     if (dataList.length === 0) {
       return res.status(404).json({ error: '数据不存在' });
     }
-
-    if (dataList[0].submitter_id !== req.user.id) {
-      return res.status(403).json({ error: '无权操作此数据' });
+    const data = dataList[0];
+    const isOwner = data.submitter_id === req.user.id;
+    const isAdmin = req.user.role === 'admin';
+    const canDeleteStatus = ['draft', 'final_rejected'].includes(data.review_status);
+    if (!isAdmin && (!isOwner || !canDeleteStatus)) {
+      return res.status(403).json({ error: '当前状态不允许删除该数据' });
     }
+    await pool.execute(`UPDATE data_submissions SET deleted_at = NOW() WHERE id = ?`, [dataId]);
+    res.json({ message: '删除成功' });
+  } catch (error) {
+    logger.error('删除数据失败:', error);
+    res.status(500).json({ error: '删除数据失败' });
+  }
+});
 
-    // 允许提交的状态：draft（首次提交）或被拒绝后重新提交
-    const allowedStatuses = ['draft', 'teacher_rejected', 'expert_rejected', 'final_rejected'];
-    if (!allowedStatuses.includes(dataList[0].review_status)) {
-      return res.status(400).json({ error: '该数据当前状态不允许提交审核' });
-    }
-
-    // 如果是重新提交（被拒绝后），清除旧的待处理审核记录
-    if (dataList[0].review_status !== 'draft') {
-      await pool.execute(
-        `DELETE FROM review_records WHERE data_id = ? AND status = 'pending'`,
-        [dataId]
-      );
-    }
-
-    // 更新状态
-    await pool.execute(
-      `UPDATE data_submissions
-       SET review_status = 'submitted', submitted_at = NOW(),
-           is_liability_accepted = ?, review_progress = 10
-       WHERE id = ?`,
-      [liability_accepted ? 1 : 0, dataId]
-    );
-
-    // 创建审核记录（导师一审）
-    await pool.execute(
-      `INSERT INTO revi
+module.exports = router;

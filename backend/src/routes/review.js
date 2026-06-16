@@ -6,6 +6,19 @@ const { auditLog } = require("../middleware/audit");
 
 const router = express.Router();
 
+const ALLOWED_REVIEW_DECISIONS = new Set([
+  'approved',
+  'rejected',
+  'revision_required'
+]);
+
+const normalizeReviewScore = (score) => {
+  if (score === undefined || score === null || score === '') return null;
+  const n = Number.parseInt(score, 10);
+  if (!Number.isFinite(n)) return null;
+  return Math.max(0, Math.min(100, n));
+};
+
 // 获取待审核列表
 router.get(
   "/pending",
@@ -14,55 +27,99 @@ router.get(
   async (req, res) => {
     try {
       const userId = req.user.id;
-      const page = parseInt(req.query.page) || 1;
-      const limit = parseInt(req.query.limit) || 10;
-      const { review_type } = req.query;
+      const page = Math.max(Number.parseInt(req.query.page, 10) || 1, 1);
+      const limit = Math.min(Math.max(Number.parseInt(req.query.limit, 10) || 10, 1), 100);
       const offset = (page - 1) * limit;
+      const reviewType = String(req.query.review_type || "").trim();
 
-      let whereClause = "";
-      let params = [];
-
-      // 导师只查看自己学生的数据
-      if (req.user.role === "teacher") {
-        // 🔴 安全合规重构：必须 status = 'active'（对方已同意）的正式学生，导师才有权审查其提交的数据
-        whereClause =
-          "AND d.submitter_id IN (SELECT student_id FROM teacher_student_relations WHERE teacher_id = ? AND status = 'active')";
-        params.push(req.user.id);
-      } else if (req.user.role === "expert") {
-        // 专家查看所有待盲审的数据（只能查看未分配或分配给自己的）
-        whereClause = "AND (r.reviewer_id IS NULL OR r.reviewer_id = ?)";
-        params.push(userId);
+      if (reviewType && !["teacher", "expert", "admin"].includes(reviewType)) {
+        return res.status(400).json({ error: "无效的审核类型" });
       }
 
-      const [reviews] = await pool.query(
-        `SELECT r.id as review_id, r.data_id, r.review_type, r.status, r.created_at as assigned_at,
-              d.title, d.description, d.data_type, d.data_format, d.submitted_at,
-              d.ai_check_status, d.ai_check_score, d.ai_anomaly_detected,
-              CASE WHEN r.is_blind_review = 1 THEN NULL ELSE u.username END as submitter_name,
-              CASE WHEN r.is_blind_review = 1 THEN NULL ELSE u.real_name END as submitter_real_name
-       FROM review_records r
-       JOIN data_submissions d ON r.data_id = d.id
-       LEFT JOIN users u ON d.submitter_id = u.id
-       WHERE r.status = 'pending' AND d.deleted_at IS NULL
-       ${review_type ? "AND r.review_type = ?" : ""}
-       ${whereClause}
-       ORDER BY d.submitted_at ASC
-       LIMIT ? OFFSET ?`,
-        [...params, ...(review_type ? [review_type] : []), limit, offset],
+      const where = ["r.status = 'pending'", "d.deleted_at IS NULL"];
+      const params = [];
+
+      if (reviewType) {
+        where.push("r.review_type = ?");
+        params.push(reviewType);
+      }
+
+      if (req.user.role === "teacher") {
+        where.push("r.review_type = 'teacher'");
+        where.push("r.reviewer_id = ?");
+        where.push(`
+          EXISTS (
+            SELECT 1
+            FROM teacher_student_relations tsr
+            WHERE tsr.teacher_id = ?
+              AND tsr.student_id = d.submitter_id
+              AND tsr.status = 'active'
+          )
+        `);
+        params.push(userId, userId);
+      } else if (req.user.role === "expert") {
+        where.push("r.review_type = 'expert'");
+        where.push("(r.reviewer_id IS NULL OR r.reviewer_id = ?)");
+        params.push(userId);
+      } else if (req.user.role === "admin") {
+        if (!reviewType) {
+          where.push("r.review_type IN ('admin', 'teacher', 'expert')");
+        }
+      }
+
+      const [reviews] = await pool.execute(
+        `SELECT
+           r.id AS review_id,
+           r.data_id,
+           r.review_type,
+           r.status,
+           r.created_at AS assigned_at,
+           d.title,
+           d.description,
+           d.data_type,
+           d.data_format,
+           d.submitted_at,
+           d.review_status,
+           d.ai_check_status,
+           d.ai_check_score,
+           d.ai_anomaly_detected,
+           CASE WHEN r.is_blind_review = 1 THEN NULL ELSE u.username END AS submitter_name,
+           CASE WHEN r.is_blind_review = 1 THEN NULL ELSE u.real_name END AS submitter_real_name
+         FROM review_records r
+         JOIN data_submissions d ON r.data_id = d.id
+         LEFT JOIN users u ON d.submitter_id = u.id
+         WHERE ${where.join(" AND ")}
+         ORDER BY d.submitted_at ASC, r.created_at ASC
+         LIMIT ? OFFSET ?`,
+        [...params, limit, offset]
       );
 
-      res.json({ reviews });
+      const [countRows] = await pool.execute(
+        `SELECT COUNT(*) AS total
+         FROM review_records r
+         JOIN data_submissions d ON r.data_id = d.id
+         WHERE ${where.join(" AND ")}`,
+        params
+      );
+
+      res.json({
+        reviews,
+        pagination: {
+          page,
+          limit,
+          total: countRows[0].total
+        }
+      });
     } catch (error) {
       logger.error("获取待审核列表失败:", error);
       res.status(500).json({ error: "获取待审核列表失败" });
     }
-  },
+  }
 );
 
 // 获取审核历史
 router.get("/history", authenticate, async (req, res) => {
   try {
-    // 验证用户ID
     if (!req.user || !req.user.id) {
       return res.status(401).json({ error: "用户未认证" });
     }
@@ -97,10 +154,12 @@ router.post(
   authorize("teacher", "admin"),
   auditLog("review", "review"),
   async (req, res) => {
+    const connection = await pool.getConnection();
+
     try {
-      const reviewId = req.params.id;
+      const reviewId = Number.parseInt(req.params.id, 10);
       const {
-        status, // approved, rejected, revision_required
+        status,
         completeness_score,
         accuracy_score,
         originality_score,
@@ -108,126 +167,151 @@ router.post(
         overall_score,
         comments,
         issues_found,
-        suggestions,
+        suggestions
       } = req.body;
 
-      // 验证审核记录
-      const [reviews] = await pool.execute(
-        `SELECT r.*, d.id as data_id, d.title, d.submitter_id, d.review_status
-       FROM review_records r
-       JOIN data_submissions d ON r.data_id = d.id
-       WHERE r.id = ? AND r.reviewer_id = ? AND r.review_type = 'teacher' AND r.status = 'pending'`,
-        [reviewId, req.user.id],
+      if (!Number.isFinite(reviewId) || reviewId <= 0) {
+        return res.status(400).json({ error: "无效的审核记录ID" });
+      }
+
+      if (!ALLOWED_REVIEW_DECISIONS.has(status)) {
+        return res.status(400).json({ error: "无效的审核结论" });
+      }
+
+      await connection.beginTransaction();
+
+      const params = [reviewId];
+      let permissionClause = "";
+
+      if (req.user.role !== "admin") {
+        permissionClause = `
+          AND r.reviewer_id = ?
+          AND EXISTS (
+            SELECT 1
+            FROM teacher_student_relations tsr
+            WHERE tsr.teacher_id = ?
+              AND tsr.student_id = d.submitter_id
+              AND tsr.status = 'active'
+          )
+        `;
+        params.push(req.user.id, req.user.id);
+      }
+
+      const [reviews] = await connection.execute(
+        `SELECT r.*, d.id AS data_id, d.title, d.submitter_id, d.review_status
+         FROM review_records r
+         JOIN data_submissions d ON r.data_id = d.id
+         WHERE r.id = ?
+           AND r.review_type = 'teacher'
+           AND r.status = 'pending'
+           AND d.deleted_at IS NULL
+           ${permissionClause}
+         FOR UPDATE`,
+        params
       );
 
       if (reviews.length === 0) {
-        return res.status(404).json({ error: "审核记录不存在或无权限" });
+        await connection.rollback();
+        return res.status(404).json({ error: "审核记录不存在、已处理或无权限" });
       }
 
       const review = reviews[0];
 
-      // 更新审核记录
-      await pool.execute(
-        `UPDATE review_records 
-       SET status = ?, completeness_score = ?, accuracy_score = ?, originality_score = ?,
-           methodology_score = ?, overall_score = ?, comments = ?, issues_found = ?, 
-           suggestions = ?, completed_at = NOW()
-       WHERE id = ?`,
+      if (review.review_status !== "teacher_reviewing") {
+        await connection.rollback();
+        return res.status(409).json({
+          error: `当前数据状态为 ${review.review_status}，不能进行导师一审`
+        });
+      }
+
+      await connection.execute(
+        `UPDATE review_records
+         SET status = ?,
+             completeness_score = ?,
+             accuracy_score = ?,
+             originality_score = ?,
+             methodology_score = ?,
+             overall_score = ?,
+             comments = ?,
+             issues_found = ?,
+             suggestions = ?,
+             completed_at = NOW()
+         WHERE id = ?`,
         [
           status,
-          completeness_score,
-          accuracy_score,
-          originality_score,
-          methodology_score,
-          overall_score,
-          comments,
+          normalizeReviewScore(completeness_score),
+          normalizeReviewScore(accuracy_score),
+          normalizeReviewScore(originality_score),
+          normalizeReviewScore(methodology_score),
+          normalizeReviewScore(overall_score),
+          comments || null,
           JSON.stringify(issues_found || []),
-          suggestions,
-          reviewId,
-        ],
+          suggestions || null,
+          reviewId
+        ]
       );
 
-      let newStatus, progress, message;
+      let newStatus;
+      let progress;
+      let message;
+      let notificationTitle;
+      let notificationContent;
 
       if (status === "approved") {
-        newStatus = "teacher_approved";
+        newStatus = "expert_reviewing";
         progress = 40;
         message = "导师一审通过，进入专家盲审阶段";
+        notificationTitle = "导师审核通过";
+        notificationContent = `您的数据《${review.title}》已通过导师一审，进入专家盲审阶段。`;
 
-        // 创建专家盲审记录
-        await pool.execute(
-          `INSERT INTO review_records (data_id, review_type, status, is_blind_review)
-         VALUES (?, 'expert', 'pending', 1)`,
-          [review.data_id],
-        );
-
-        // 更新数据状态
-        await pool.execute(
-          "UPDATE data_submissions SET review_status = ?, review_progress = ? WHERE id = ?",
-          [newStatus, progress, review.data_id],
-        );
-
-        // 通知提交者
-        await pool.execute(
-          `INSERT INTO notifications (user_id, type, title, content, related_type, related_id)
-         VALUES (?, 'review', '导师审核通过', ?, 'data', ?)`,
-          [
-            review.submitter_id,
-            `您的数据《${review.title}》已通过导师一审，进入专家盲审阶段`,
-            review.data_id,
-          ],
+        await connection.execute(
+          `INSERT INTO review_records (data_id, reviewer_id, review_type, status, is_blind_review)
+           VALUES (?, NULL, 'expert', 'pending', 1)`,
+          [review.data_id]
         );
       } else if (status === "rejected") {
         newStatus = "teacher_rejected";
         progress = 0;
         message = "导师审核未通过";
-
-        await pool.execute(
-          "UPDATE data_submissions SET review_status = ?, review_progress = ? WHERE id = ?",
-          [newStatus, progress, review.data_id],
-        );
-
-        // 通知提交者
-        await pool.execute(
-          `INSERT INTO notifications (user_id, type, title, content, related_type, related_id)
-         VALUES (?, 'review', '导师审核未通过', ?, 'data', ?)`,
-          [
-            review.submitter_id,
-            `您的数据《${review.title}》未通过导师审核，请修改后重新提交`,
-            review.data_id,
-          ],
-        );
+        notificationTitle = "导师审核未通过";
+        notificationContent = `您的数据《${review.title}》未通过导师审核，请修改后重新提交。`;
       } else {
-        // revision_required
-        newStatus = "draft";
+        newStatus = "teacher_rejected";
         progress = 0;
         message = "需要修改后重新提交";
-
-        await pool.execute(
-          "UPDATE data_submissions SET review_status = ?, review_progress = ? WHERE id = ?",
-          [newStatus, progress, review.data_id],
-        );
-
-        // 通知提交者
-        await pool.execute(
-          `INSERT INTO notifications (user_id, type, title, content, related_type, related_id)
-         VALUES (?, 'review', '数据需要修改', ?, 'data', ?)`,
-          [
-            review.submitter_id,
-            `您的数据《${review.title}》需要修改，请根据审核意见完善后重新提交`,
-            review.data_id,
-          ],
-        );
+        notificationTitle = "数据需要修改";
+        notificationContent = `您的数据《${review.title}》需要修改，请根据导师意见完善后重新提交。`;
       }
+
+      await connection.execute(
+        "UPDATE data_submissions SET review_status = ?, review_progress = ? WHERE id = ?",
+        [newStatus, progress, review.data_id]
+      );
+
+      await connection.execute(
+        `INSERT INTO notifications (user_id, type, title, content, related_type, related_id)
+         VALUES (?, 'review', ?, ?, 'data', ?)`,
+        [
+          review.submitter_id,
+          notificationTitle,
+          notificationContent,
+          review.data_id
+        ]
+      );
+
+      await connection.commit();
 
       logger.info(`导师审核完成: review_id=${reviewId}, status=${status}`);
 
       res.json({ message, new_status: newStatus });
     } catch (error) {
+      await connection.rollback();
       logger.error("导师审核失败:", error);
       res.status(500).json({ error: "审核失败" });
+    } finally {
+      connection.release();
     }
-  },
+  }
 );
 
 // 执行专家盲审
@@ -249,16 +333,24 @@ router.post(
         comments,
         issues_found,
         suggestions,
-        ai_analysis, // AI辅助分析结果
+        ai_analysis,
       } = req.body;
+
+      if (!ALLOWED_REVIEW_DECISIONS.has(status)) {
+        return res.status(400).json({ error: "无效的审核结论" });
+      }
 
       // 验证审核记录
       const [reviews] = await pool.execute(
         `SELECT r.*, d.id as data_id, d.title, d.submitter_id, d.review_status
        FROM review_records r
        JOIN data_submissions d ON r.data_id = d.id
-       WHERE r.id = ? AND r.review_type = 'expert' AND r.status = 'pending'`,
-        [reviewId],
+       WHERE r.id = ?
+         AND r.review_type = 'expert'
+         AND r.status = 'pending'
+         AND d.deleted_at IS NULL
+         AND (r.reviewer_id IS NULL OR r.reviewer_id = ?)`,
+        [reviewId, req.user.id],
       );
 
       if (reviews.length === 0) {
@@ -267,7 +359,13 @@ router.post(
 
       const review = reviews[0];
 
-      // 如果没有指定reviewer，则分配给当前专家（条件更新防并发）
+      if (review.review_status !== "expert_reviewing") {
+        return res.status(409).json({
+          error: `当前数据状态为 ${review.review_status}，不能进行专家盲审`
+        });
+      }
+
+      // 如果原记录未分配专家，则第一次提交时锁定到当前专家
       if (!review.reviewer_id) {
         const [claimResult] = await pool.execute(
           "UPDATE review_records SET reviewer_id = ? WHERE id = ? AND reviewer_id IS NULL AND status = 'pending'",
@@ -277,15 +375,13 @@ router.post(
         if (claimResult.affectedRows !== 1) {
           return res.status(409).json({ error: "该审核已被其他专家领取，请刷新列表" });
         }
-      } else if (Number(review.reviewer_id) !== Number(req.user.id)) {
-        return res.status(403).json({ error: "该审核已被其他专家领取" });
       }
 
       // 更新审核记录
       await pool.execute(
-        `UPDATE review_records 
+        `UPDATE review_records
        SET status = ?, completeness_score = ?, accuracy_score = ?, originality_score = ?,
-           methodology_score = ?, overall_score = ?, comments = ?, issues_found = ?, 
+           methodology_score = ?, overall_score = ?, comments = ?, issues_found = ?,
            suggestions = ?, ai_assisted = ?, ai_analysis = ?, completed_at = NOW()
        WHERE id = ?`,
         [
@@ -313,16 +409,15 @@ router.post(
 
         // 创建管理员终审记录
         await pool.execute(
-          `INSERT INTO review_records (data_id, review_type, status, is_blind_review)
-         VALUES (?, 'admin', 'pending', 0)`,
+          `INSERT INTO review_records (data_id, reviewer_id, review_type, status, is_blind_review)
+         VALUES (?, NULL, 'admin', 'pending', 0)`,
           [review.data_id],
         );
       } else if (status === "rejected") {
         newStatus = "expert_rejected";
         progress = 0;
-        message = "专家盲审未通过";
       } else {
-        newStatus = "draft";
+        newStatus = "expert_rejected";
         progress = 0;
         message = "需要修改后重新提交";
       }
@@ -364,26 +459,51 @@ router.get(
       const dataId = req.params.id;
 
       const [dataList] = await pool.execute(
-        "SELECT ai_check_result, ai_check_score, ai_anomaly_detected FROM data_submissions WHERE id = ?",
-        [dataId],
+        `SELECT id, submitter_id, review_status, ai_check_result, ai_check_score, ai_anomaly_detected
+         FROM data_submissions
+         WHERE id = ? AND deleted_at IS NULL`,
+        [dataId]
       );
 
       if (dataList.length === 0) {
         return res.status(404).json({ error: "数据不存在" });
       }
 
-      // 🔴 核心修复：执行反序列化对齐前端命名空间，并追加大模型智能意见字段
+      const data = dataList[0];
+
+      let hasPermission = req.user.role === "admin";
+
+      if (!hasPermission && req.user.role === "teacher") {
+        const [relations] = await pool.execute(
+          `SELECT id FROM teacher_student_relations
+           WHERE teacher_id = ? AND student_id = ? AND status = 'active'`,
+          [req.user.id, data.submitter_id]
+        );
+        hasPermission = relations.length > 0;
+      }
+
+      if (!hasPermission && req.user.role === "expert") {
+        const [reviews] = await pool.execute(
+          `SELECT id FROM review_records
+           WHERE data_id = ? AND review_type = 'expert' AND (reviewer_id IS NULL OR reviewer_id = ?)`,
+          [dataId, req.user.id]
+        );
+        hasPermission = reviews.length > 0;
+      }
+
+      if (!hasPermission) {
+        return res.status(403).json({ error: "无权查看该数据的AI分析结果" });
+      }
+
       let rawResult = {};
       try {
-        rawResult = dataList[0].ai_check_result
-          ? JSON.parse(dataList[0].ai_check_result)
-          : {};
+        rawResult = data.ai_check_result ? JSON.parse(data.ai_check_result) : {};
       } catch (e) {
         logger.error("解析AI检查结果失败:", e);
       }
       res.json({
-        score: dataList[0].ai_check_score,
-        has_anomaly: dataList[0].ai_anomaly_detected === 1,
+        score: data.ai_check_score,
+        has_anomaly: data.ai_anomaly_detected === 1,
         anomalies: rawResult.anomaly_detection?.anomalies || [],
         llm_insight: rawResult.llm_insight || "该数据集尚无大模型审计报告。",
       });

@@ -6,9 +6,21 @@
     
     <!-- 筛选栏 -->
     <el-card class="filter-card">
-      <el-form :model="filters" inline>
-        <el-form-item label="角色">
-          <el-select v-model="filters.role" placeholder="全部角色" clearable>
+      <el-form
+        :model="filters"
+        class="filter-form"
+        label-position="top"
+        @submit.prevent
+      >
+        <el-form-item label="角色" class="filter-item">
+          <el-select
+            v-model="filters.role"
+            class="filter-control"
+            placeholder="全部角色"
+            clearable
+            @change="handleFilterChange"
+          >
+            <el-option label="全部角色" value="" />
             <el-option label="学生" value="student" />
             <el-option label="导师" value="teacher" />
             <el-option label="专家" value="expert" />
@@ -16,22 +28,39 @@
             <el-option label="普通用户" value="civilian" />
           </el-select>
         </el-form-item>
-        
-        <el-form-item label="状态">
-          <el-select v-model="filters.status" placeholder="全部状态" clearable>
+
+        <el-form-item label="状态" class="filter-item">
+          <el-select
+            v-model="filters.status"
+            class="filter-control"
+            placeholder="全部状态"
+            clearable
+            @change="handleFilterChange"
+          >
+            <el-option label="全部状态" value="" />
             <el-option label="正常" value="active" />
-            <el-option label="待验证" value="pending_verification" />
+            <el-option label="待审核" value="pending_verification" />
+            <el-option label="未通过/未激活" value="inactive" />
             <el-option label="已封禁" value="suspended" />
           </el-select>
         </el-form-item>
-        
-        <el-form-item label="搜索">
-          <el-input v-model="filters.search" placeholder="用户名/邮箱/姓名" clearable />
+
+        <el-form-item label="搜索" class="filter-item filter-search-item">
+          <el-input
+            v-model="filters.search"
+            class="filter-control"
+            placeholder="用户名/邮箱/姓名"
+            clearable
+            @clear="handleFilterChange"
+            @keyup.enter="handleSearch"
+          />
         </el-form-item>
-        
-        <el-form-item>
-          <el-button type="primary" @click="fetchData">查询</el-button>
-          <el-button @click="resetFilters">重置</el-button>
+
+        <el-form-item label="操作" class="filter-item filter-actions-item">
+          <div class="filter-actions">
+            <el-button type="primary" @click="handleSearch">查询</el-button>
+            <el-button @click="resetFilters">重置</el-button>
+          </div>
         </el-form-item>
       </el-form>
     </el-card>
@@ -180,43 +209,70 @@ const roleType = {
 }
 
 const statusMap = {
-  'active': '正常',
-  'pending_verification': '待验证',
-  'suspended': '已封禁',
-  'inactive': '未激活'
+  active: '正常',
+  pending_verification: '待审核',
+  inactive: '未通过/未激活',
+  suspended: '已封禁'
 }
 
 const statusType = {
-  'active': 'success',
-  'pending_verification': 'warning',
-  'suspended': 'danger',
-  'inactive': 'info'
+  active: 'success',
+  pending_verification: 'warning',
+  inactive: 'info',
+  suspended: 'danger'
 }
 
 const formatDate = (date) => dayjs(date).format('YYYY-MM-DD HH:mm')
 
+const buildUserQuery = () => {
+  const params = new URLSearchParams()
+
+  params.set('page', String(pagination.page))
+  params.set('limit', String(pagination.limit))
+
+  const role = String(filters.role || '').trim()
+  const status = String(filters.status || '').trim()
+  const search = String(filters.search || '').trim()
+
+  if (role) params.set('role', role)
+  if (status) params.set('status', status)
+  if (search) params.set('search', search)
+
+  return params.toString()
+}
+
 const fetchData = async () => {
   loading.value = true
   try {
-    let url = `/admin/users?page=${pagination.page}&limit=${pagination.limit}`
-    if (filters.role) url += `&role=${filters.role}`
-    if (filters.status) url += `&status=${filters.status}`
-    if (filters.search) url += `&search=${filters.search}`
-    
-    const response = await api.get(url)
-    userList.value = response.users
-    pagination.total = response.pagination.total
+    const response = await api.get(`/admin/users?${buildUserQuery()}`)
+
+    userList.value = response.users || []
+    pagination.total = response.pagination?.total || 0
+    pagination.page = response.pagination?.page || pagination.page
+    pagination.limit = response.pagination?.limit || pagination.limit
   } catch (error) {
-    ElMessage.error('获取用户列表失败')
+    console.error('获取用户列表失败:', error)
+    ElMessage.error(error.response?.data?.error || '获取用户列表失败')
   } finally {
     loading.value = false
   }
+}
+
+const handleFilterChange = () => {
+  pagination.page = 1
+  fetchData()
+}
+
+const handleSearch = () => {
+  pagination.page = 1
+  fetchData()
 }
 
 const resetFilters = () => {
   filters.role = ''
   filters.status = ''
   filters.search = ''
+  pagination.page = 1
   fetchData()
 }
 
@@ -273,6 +329,7 @@ const deleteUser = (row) => {
 
 const handleSizeChange = (size) => {
   pagination.limit = size
+  pagination.page = 1
   fetchData()
 }
 
@@ -307,7 +364,7 @@ const rejectUser = async (row) => {
       type: 'error'
     })
 
-    await api.post(`/admin/users/${row.id}/verify`, { status: 'pending_verification', reason: reason || '资料不完整' })
+    await api.post(`/admin/users/${row.id}/verify`, { status: 'inactive', reason: reason || '资料不完整' })
     ElMessage.success('已驳回')
     fetchData()
   } catch {
@@ -316,6 +373,7 @@ const rejectUser = async (row) => {
 }
 
 const toggleIdVerified = async (row, verified) => {
+  const action = verified ? '验证' : '取消验证'
   const action = verified ? '验证' : '取消验证'
   try {
     await ElMessageBox.confirm(`确定要${action}用户 ${row.username} 的身份吗？`, `确认${action}`, {
@@ -355,7 +413,6 @@ const activateUser = (row) => {
     type: 'success'
   }).then(async () => {
     try {
-      // 同样调用 verify 接口，将状态改回 active
       await api.post(`/admin/users/${row.id}/verify`, { status: 'active' })
       ElMessage.success('账号解封成功')
       fetchData()
@@ -373,6 +430,59 @@ onMounted(() => {
 <style scoped>
 .filter-card {
   margin-bottom: 20px;
+}
+
+.filter-card :deep(.el-card__body) {
+  padding-bottom: 12px;
+}
+
+.filter-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px 16px;
+  align-items: end;
+}
+
+.filter-item {
+  margin-right: 0 !important;
+  margin-bottom: 0 !important;
+}
+
+.filter-search-item {
+  min-width: 220px;
+}
+
+.filter-control {
+  width: 100%;
+}
+
+.filter-actions-item :deep(.el-form-item__content) {
+  width: 100%;
+}
+
+.filter-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+@media (max-width: 768px) {
+  .filter-form {
+    grid-template-columns: 1fr;
+  }
+
+  .filter-search-item {
+    min-width: 0;
+  }
+
+  .filter-actions {
+    width: 100%;
+  }
+
+  .filter-actions .el-button {
+    flex: 1;
+  }
 }
 
 .pagination-container {

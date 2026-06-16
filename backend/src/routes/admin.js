@@ -6,12 +6,33 @@ const { authenticate, authorize } = require("../middleware/auth");
 
 const router = express.Router();
 
+const ALLOWED_USER_ROLES = new Set([
+  'student',
+  'teacher',
+  'expert',
+  'admin',
+  'civilian'
+]);
+
+const ALLOWED_USER_STATUSES = new Set([
+  'active',
+  'inactive',
+  'suspended',
+  'pending_verification'
+]);
+
+const normalizePositiveInt = (value, defaultValue, maxValue) => {
+  const n = Number.parseInt(value, 10);
+  if (!Number.isFinite(n) || n <= 0) return defaultValue;
+  return Math.min(n, maxValue);
+};
+
 // 获取仪表盘统计
 router.get("/dashboard", authenticate, authorize("admin"), async (req, res) => {
   try {
     // 用户统计
     const [userStats] = await pool.execute(
-      `SELECT 
+      `SELECT
         COUNT(*) as total_users,
         SUM(CASE WHEN role = 'student' THEN 1 ELSE 0 END) as students,
         SUM(CASE WHEN role = 'teacher' THEN 1 ELSE 0 END) as teachers,
@@ -22,7 +43,7 @@ router.get("/dashboard", authenticate, authorize("admin"), async (req, res) => {
 
     // 数据统计
     const [dataStats] = await pool.execute(
-      `SELECT 
+      `SELECT
         COUNT(*) as total_data,
         SUM(CASE WHEN review_status = 'draft' THEN 1 ELSE 0 END) as drafts,
         SUM(CASE WHEN review_status IN ('submitted', 'teacher_reviewing') THEN 1 ELSE 0 END) as teacher_pending,
@@ -34,7 +55,7 @@ router.get("/dashboard", authenticate, authorize("admin"), async (req, res) => {
 
     // 审核统计
     const [reviewStats] = await pool.execute(
-      `SELECT 
+      `SELECT
         COUNT(*) as total_reviews,
         SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending_reviews,
         SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) as approved_reviews,
@@ -66,17 +87,28 @@ router.get("/dashboard", authenticate, authorize("admin"), async (req, res) => {
 // 获取用户列表
 router.get("/users", authenticate, authorize("admin"), async (req, res) => {
   try {
-    const { page = 1, limit = 20, role, status, search } = req.query;
+    const page = normalizePositiveInt(req.query.page, 1, 100000);
+    const limit = normalizePositiveInt(req.query.limit, 20, 100);
+    const offset = (page - 1) * limit;
 
-    // 严格计算并拦截安全限制上限，强制单次查询最大上限为 100 条记录，防止高并发下内存溢出 (OOM)
-    let safeLimit = parseInt(limit);
-    if (isNaN(safeLimit) || safeLimit <= 0) safeLimit = 20;
-    if (safeLimit > 100) safeLimit = 100;
+    const role = String(req.query.role || "").trim();
+    const status = String(req.query.status || "").trim();
+    const search = String(req.query.search || "").trim();
 
-    const offset = (parseInt(page) - 1) * safeLimit;
+    if (role && !ALLOWED_USER_ROLES.has(role)) {
+      return res.status(400).json({ error: "无效的角色筛选条件" });
+    }
+
+    if (status && !ALLOWED_USER_STATUSES.has(status)) {
+      return res.status(400).json({ error: "无效的状态筛选条件" });
+    }
+
+    if (search.length > 100) {
+      return res.status(400).json({ error: "搜索关键词过长" });
+    }
 
     let whereClause = "WHERE deleted_at IS NULL";
-    let params = [];
+    const params = [];
 
     if (role) {
       whereClause += " AND role = ?";
@@ -89,32 +121,34 @@ router.get("/users", authenticate, authorize("admin"), async (req, res) => {
     }
 
     if (search) {
-      whereClause +=
-        " AND (username LIKE ? OR email LIKE ? OR real_name LIKE ?)";
-      params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+      whereClause += " AND (username LIKE ? OR email LIKE ? OR real_name LIKE ?)";
+      const keyword = `%${search.replace(/[%_]/g, "\\$&")}%`;
+      params.push(keyword, keyword, keyword);
     }
 
-    const [users] = await pool.query(
-      `SELECT id, username, email, real_name, role, status, phone_verified, id_verified,
-              quota_total, quota_used, last_login_at, created_at
-       FROM users ${whereClause}
+    const [users] = await pool.execute(
+      `SELECT id, username, email, phone, real_name, avatar_url, role, status,
+              email_verified, phone_verified, id_verified, quota_total, quota_used,
+              created_at, last_login_at
+       FROM users
+       ${whereClause}
        ORDER BY created_at DESC
        LIMIT ? OFFSET ?`,
-      [...params, safeLimit, offset],
+      [...params, limit, offset]
     );
 
     const [countResult] = await pool.execute(
-      `SELECT COUNT(*) as total FROM users ${whereClause}`,
-      params,
+      `SELECT COUNT(*) AS total FROM users ${whereClause}`,
+      params
     );
 
     res.json({
       users,
       pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
-        total: countResult[0].total,
-      },
+        page,
+        limit,
+        total: countResult[0].total
+      }
     });
   } catch (error) {
     logger.error("获取用户列表失败:", error);
@@ -122,77 +156,134 @@ router.get("/users", authenticate, authorize("admin"), async (req, res) => {
   }
 });
 
-// 审核用户（验证身份 - 补齐对 suspended 封禁状态的业务流支持）
+// 审核用户（验证身份）
 router.post(
   "/users/:id/verify",
   authenticate,
   authorize("admin"),
   async (req, res) => {
     try {
-      const userId = req.params.id;
-      const { status, reason } = req.body; // status: active, rejected, suspended
+      const userId = Number.parseInt(req.params.id, 10);
+      const rawStatus = String(req.body.status || "").trim();
+      const reason = String(req.body.reason || "").trim();
+
+      if (!Number.isFinite(userId) || userId <= 0) {
+        return res.status(400).json({ error: "无效的用户ID" });
+      }
+
+      // 兼容旧前端或旧接口：如果误传 rejected，统一落到 inactive
+      const targetStatus = rawStatus === "rejected" ? "inactive" : rawStatus;
+
+      if (!ALLOWED_USER_STATUSES.has(targetStatus)) {
+        return res.status(400).json({ error: "无效的用户状态" });
+      }
 
       const [users] = await pool.execute(
-        "SELECT username, email, role, status, id_card_front FROM users WHERE id = ?",
-        [userId],
+        `SELECT id, username, email, real_name, role, status,
+                id_card_front, id_card_back, id_verified, deleted_at
+         FROM users
+         WHERE id = ? AND deleted_at IS NULL`,
+        [userId]
       );
 
       if (users.length === 0) {
         return res.status(404).json({ error: "用户不存在" });
       }
 
-      // 仅在从待验证→通过 且 已上传身份证件时才标记身份验证
-      const prevStatus = users[0].status;
-      const hasIdCard = !!users[0].id_card_front;
-      const shouldVerify = prevStatus === "pending_verification" && status === "active" && hasIdCard;
+      const user = users[0];
+
+      if (user.role === "admin" && targetStatus !== "active") {
+        const [adminCount] = await pool.execute(
+          "SELECT COUNT(*) AS count FROM users WHERE role = 'admin' AND status = 'active' AND deleted_at IS NULL"
+        );
+
+        if (adminCount[0].count <= 1) {
+          return res.status(400).json({ error: "不能停用或拒绝最后一个有效管理员" });
+        }
+      }
+
+      const allowedTransitions = {
+        pending_verification: new Set(["active", "inactive", "suspended"]),
+        inactive: new Set(["pending_verification", "active", "suspended"]),
+        active: new Set(["suspended", "inactive"]),
+        suspended: new Set(["active", "inactive"])
+      };
+
+      if (
+        user.status !== targetStatus &&
+        !allowedTransitions[user.status]?.has(targetStatus)
+      ) {
+        return res.status(409).json({
+          error: `不允许从 ${user.status} 直接切换到 ${targetStatus}`
+        });
+      }
+
+      const hasIdCard = Boolean(user.id_card_front && user.id_card_back);
 
       const updateFields = ["status = ?"];
-      const updateParams = [status];
-      if (shouldVerify) {
+      const updateParams = [targetStatus];
+
+      if (targetStatus === "active" && hasIdCard) {
         updateFields.push("id_verified = 1");
+      }
+
+      if (targetStatus === "inactive") {
+        updateFields.push("id_verified = 0");
       }
 
       await pool.execute(
         `UPDATE users SET ${updateFields.join(", ")} WHERE id = ?`,
-        [...updateParams, userId],
+        [...updateParams, userId]
       );
 
-      // 动态推断通知标题与具体通知文本内容
-      let title = "身份验证未通过";
-      let content = `您的身份验证未通过，原因：${reason || "资料不完整"}`;
+      const noticeMap = {
+        active: {
+          title: "身份验证通过",
+          content: "您的身份验证已通过，可以正常使用系统功能。"
+        },
+        inactive: {
+          title: "身份验证未通过",
+          content: `您的身份验证未通过。${reason ? `原因：${reason}` : "请检查资料后重新提交。"}`
+        },
+        suspended: {
+          title: "账号已被封禁",
+          content: `您的账号已被封禁。${reason ? `原因：${reason}` : "如有疑问请联系管理员。"}`
+        },
+        pending_verification: {
+          title: "身份验证状态已重置",
+          content: "您的身份验证状态已重置为待审核。"
+        }
+      };
 
-      if (status === "active") {
-        title = "身份验证通过";
-        content = "您的身份验证已通过，可以正常使用系统功能";
-      } else if (status === "suspended") {
-        title = "账号封禁通知";
-        content = `您的账号在审核阶段已被管理员强制封禁，原因：${reason || "检测到注册信息存在安全合规风险"}`;
-      }
+      const notice = noticeMap[targetStatus];
 
-      // 发送系统内精准通知
       await pool.execute(
         `INSERT INTO notifications (user_id, type, title, content)
-       VALUES (?, 'system', ?, ?)`,
-        [userId, title, content],
+         VALUES (?, 'system', ?, ?)`,
+        [userId, notice.title, notice.content]
       );
 
       logger.info(
-        `用户审核状态变更: user_id=${userId}, 最终状态设为=${status}`,
+        `管理员更新用户状态: admin=${req.user.id}, user=${userId}, from=${user.status}, to=${targetStatus}`
       );
 
+      const messageMap = {
+        active: "用户审核已通过",
+        inactive: "用户审核已拒绝",
+        suspended: "用户已封禁",
+        pending_verification: "用户状态已重置为待审核"
+      };
+
       res.json({
-        message:
-          status === "active"
-            ? "审核通过"
-            : status === "suspended"
-              ? "已封禁"
-              : "已拒绝",
+        message: messageMap[targetStatus],
+        status: targetStatus,
+        id_verified: targetStatus === "active" && hasIdCard ? 1 : targetStatus === "inactive" ? 0 : user.id_verified
       });
     } catch (error) {
-      logger.error("用户审核状态变更失败:", error);
-      res.status(500).json({ error: "审核或封禁状态应用失败" });
+      logger.error("用户身份审核失败:", error);
+      res.status(500).json({ error: "审核操作失败" });
     }
-  },
+  }
 );
 
 // 单独设置用户身份验证状态（不影响账号状态）
@@ -456,7 +547,7 @@ router.get("/settings", authenticate, authorize("admin"), async (req, res) => {
   });
 });
 
-// 管理员软删除用户接口 (已修复路径拼接错乱及归属不规范问题)
+// 管理员软删除用户接口
 router.delete(
   "/users/:id",
   authenticate,
@@ -465,7 +556,6 @@ router.delete(
     try {
       const targetUserId = req.params.id;
 
-      // 强校验：防止因前端未传参引入恶意或无效路径标识
       if (
         !targetUserId ||
         isNaN(Number(targetUserId)) ||
@@ -474,7 +564,6 @@ router.delete(
         return res.status(400).json({ error: "无效的用户ID参数" });
       }
 
-      // 1. 拦截最高管理员自毁风险（引入未删除限制条件）
       const [targetUser] = await pool.execute(
         "SELECT role FROM users WHERE id = ? AND deleted_at IS NULL",
         [targetUserId],
@@ -484,19 +573,16 @@ router.delete(
       }
 
       if (targetUser[0].role === "admin") {
-        // 检查系统中剩余未被删除的管理员数量
         const [adminCount] = await pool.execute(
           "SELECT COUNT(*) as count FROM users WHERE role = 'admin' AND deleted_at IS NULL",
         );
         if (adminCount[0].count <= 1) {
           return res.status(403).json({
-            error:
-              "安全拦截：无法删除系统中最后一个管理员账号，否则将导致系统锁死",
+            error: "安全拦截：无法删除系统中最后一个管理员账号，否则将导致系统锁死",
           });
         }
       }
 
-      // 2. 拒绝硬删除（Hard Delete），执行软删除（Soft Delete），防止破坏外键约束与审计日志关联
       await pool.execute(
         "UPDATE users SET deleted_at = NOW(), status = 'suspended' WHERE id = ?",
         [targetUserId],
@@ -513,12 +599,11 @@ router.delete(
   },
 );
 
-// 管理员通用修改用户信息接口 (全面支持提权、配额入库，并增加了对恶意传参或特殊包裹请求体的兼容)
+// 管理员通用修改用户信息接口
 router.put("/users/:id", authenticate, authorize("admin"), async (req, res) => {
   try {
     const targetUserId = req.params.id;
 
-    // 严格防御：防止前端由于参数处理不当传入包含 "undefined" 的无效路径引发数据库逻辑错乱
     if (
       !targetUserId ||
       isNaN(Number(targetUserId)) ||
@@ -527,7 +612,6 @@ router.put("/users/:id", authenticate, authorize("admin"), async (req, res) => {
       return res.status(400).json({ error: "无效的用户ID参数" });
     }
 
-    // 健壮性增强：完美兼容前端直接传递平铺字段，或将其包裹在 form/user 对象中发送的各种变体
     const dataSource = req.body.form || req.body.user || req.body;
 
     const username = dataSource.username;
@@ -543,7 +627,6 @@ router.put("/users/:id", authenticate, authorize("admin"), async (req, res) => {
         ? dataSource.quota_total
         : dataSource.quotaTotal;
 
-    // 验证目标用户是否存在并拉取其当前角色信息
     const [targetUser] = await pool.execute(
       "SELECT id, role FROM users WHERE id = ? AND deleted_at IS NULL",
       [targetUserId],
@@ -553,16 +636,13 @@ router.put("/users/:id", authenticate, authorize("admin"), async (req, res) => {
     }
     const currentRole = targetUser[0].role;
 
-    // 1. 精准执行唯一性约束与用户名合法性核验
     if (username !== undefined) {
-      // 增加长度限制防御
       if (username.length < 3 || username.length > 50) {
         return res
           .status(400)
           .json({ error: "用户名长度必须在 3 到 50 个字符之间" });
       }
-      // 增加字符合法性正则校验，拦截恶意注入或非法特殊字符
-      const usernameRegex = /^[a-zA-Z0-9\u4e00-\u9fa5]+$/;
+      const usernameRegex = /^[a-zA-Z0-9一-龥]+$/;
       if (!usernameRegex.test(username)) {
         return res
           .status(400)
@@ -578,7 +658,6 @@ router.put("/users/:id", authenticate, authorize("admin"), async (req, res) => {
       }
     }
 
-    // 2. 提权角色合法性核验与末位管理员降级风险拦截
     if (role !== undefined) {
       const allowedRoles = [
         "student",
@@ -591,15 +670,13 @@ router.put("/users/:id", authenticate, authorize("admin"), async (req, res) => {
         return res.status(400).json({ error: "无效的变更目标角色类型" });
       }
 
-      // 如果当前被修改用户为管理员，但试图将其变更为非管理员角色（触发降级）
       if (currentRole === "admin" && role !== "admin") {
         const [adminCount] = await pool.execute(
           "SELECT COUNT(*) as count FROM users WHERE role = 'admin' AND deleted_at IS NULL",
         );
         if (adminCount[0].count <= 1) {
           return res.status(403).json({
-            error:
-              "安全拦截：该用户是系统中唯一的活跃管理员，禁止将其降级或更改角色",
+            error: "安全拦截：该用户是系统中唯一的活跃管理员，禁止将其降级或更改角色",
           });
         }
       }
@@ -614,7 +691,6 @@ router.put("/users/:id", authenticate, authorize("admin"), async (req, res) => {
         return res.status(409).json({ error: "该邮箱已被其他账号绑定" });
     }
 
-    // 2. 采用安全的动态 SQL 拼接，补充配额(quota_total)与角色提权(role)的动态入库映射
     const updateFields = [];
     const queryParams = [];
 
@@ -649,7 +725,6 @@ router.put("/users/:id", authenticate, authorize("admin"), async (req, res) => {
         .json({ error: "未检测到任何可变更的有效变动字段" });
     }
 
-    // 压入 WHERE 语句的查询 ID
     queryParams.push(targetUserId);
 
     const sql = `UPDATE users SET ${updateFields.join(", ")} WHERE id = ?`;
@@ -665,7 +740,7 @@ router.put("/users/:id", authenticate, authorize("admin"), async (req, res) => {
   }
 });
 
-// 管理员强制重置任意用户密码接口 (彻底补齐密码修改逻辑缺失问题)
+// 管理员强制重置任意用户密码接口
 router.post(
   "/users/:id/reset-password",
   authenticate,
@@ -687,7 +762,6 @@ router.post(
         return res.status(404).json({ error: "目标用户不存在" });
       }
 
-      // 密码强加盐加密
       const passwordHash = await bcrypt.hash(newPassword, 10);
 
       await pool.execute("UPDATE users SET password_hash = ? WHERE id = ?", [

@@ -368,5 +368,66 @@ const confirmSubmit = async () => {
   }
 }
 
-const deleteData = (row) => {
+const deleteData = async (row) => {
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除数据「${row.title}」吗？删除后将不可恢复。`,
+      '删除确认',
+      {
+        confirmButtonText: '确定删除',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    )
+
+    await api.delete(`/data/${row.id}`)
+    ElMessage.success('删除成功')
+    fetchData()
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') {
+      return
+    }
+
+    ElMessage.error(error?.error || '删除失败')
+  }
+}
+
+onMounted(() => {
+  fetchData()
+})
+</script>
+
+<style scoped>
+.page-container {
+  padding: 20px;
+}
+
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+.page-title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.filter-card {
+  margin-bottom: 16px;
+}
+
+.pagination-container {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.w-full {
+  width: 100%;
+}
+</style>
+
   

@@ -156,3 +156,29 @@ const handleTerminate = async (relationId) => {
 }
 
 onMounted(() => {
+  fetchStudents()
+})
+</script>
+
+<style scoped>
+.page-container {
+  padding: 20px;
+}
+
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+.page-title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.el-card {
+  border-radius: 8px;
+}
+</style>

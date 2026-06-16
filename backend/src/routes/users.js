@@ -17,20 +17,16 @@ router.get(
     try {
       const { role, search, page = 1, limit = 20 } = req.query;
 
-      // 1. 严格计算安全限制上限
       let safeLimit = parseInt(limit);
       if (isNaN(safeLimit) || safeLimit <= 0) safeLimit = 20;
-      if (safeLimit > 100) safeLimit = 100; // 强制单次查询最大上限为 100 条记录
+      if (safeLimit > 100) safeLimit = 100;
 
-      // 2. 修正：使用控制后的 safeLimit 计算偏移量，防止逻辑越界
       const offset = (parseInt(page) - 1) * safeLimit;
 
       let whereClause = "WHERE deleted_at IS NULL";
       let params = [];
 
-      // 教师只能查看自己的学生
       if (req.user.role === "teacher") {
-        // 仅允许教师查看已确认(active)关系下的学生，防止 pending_confirm 状态泄露学生基础档案
         whereClause +=
           ' AND id IN (SELECT student_id FROM teacher_student_relations WHERE teacher_id = ? AND status = "active")';
         params.push(req.user.id);
@@ -46,7 +42,6 @@ router.get(
         params.push(`%${search}%`, `%${search}%`);
       }
 
-      // 3. 修正：将参数绑定的限制项替换为安全的 safeLimit 变量
       const [users] = await pool.query(
         `SELECT id, username, real_name, avatar_url, role, status, created_at
        FROM users ${whereClause}
@@ -66,7 +61,6 @@ router.get(
 // 获取通知列表
 router.get("/notifications/list", authenticate, async (req, res) => {
   try {
-    // 验证用户ID
     if (!req.user || !req.user.id) {
       return res.status(401).json({ error: "用户未认证" });
     }
@@ -92,13 +86,11 @@ router.get("/notifications/list", authenticate, async (req, res) => {
       [...params, limit, offset],
     );
 
-    // 获取未读数量
     const [unreadCount] = await pool.execute(
       "SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0",
       [userId],
     );
 
-    // 计算满足当前筛选条件的通知总条数
     const [totalCount] = await pool.execute(
       `SELECT COUNT(*) as total FROM notifications ${whereClause}`,
       params,
@@ -124,7 +116,7 @@ router.get("/quota-logs", authenticate, async (req, res) => {
   try {
     const [logs] = await pool.execute(
       `SELECT action_type, quota_consumed, description, created_at
-       FROM quota_usage_logs 
+       FROM quota_usage_logs
        WHERE user_id = ?
        ORDER BY created_at DESC
        LIMIT 50`,
@@ -146,13 +138,30 @@ router.get(
   async (req, res) => {
     try {
       const [students] = await pool.execute(
-        `SELECT u.id, u.username, u.real_name, u.avatar_url, u.status, u.created_at,
-              tsr.id as relation_id, tsr.status as relation_status, tsr.created_at as added_at
-       FROM users u
-       JOIN teacher_student_relations tsr ON u.id = tsr.student_id
-       WHERE tsr.teacher_id = ? AND u.deleted_at IS NULL
-       ORDER BY tsr.created_at DESC`,
-        [req.user.id],
+        `SELECT
+           u.id,
+           u.username,
+           u.real_name,
+           u.avatar_url,
+           u.status,
+           u.created_at,
+           tsr.id AS relation_id,
+           tsr.status AS relation_status,
+           tsr.created_at AS added_at
+         FROM teacher_student_relations tsr
+         JOIN users u ON u.id = tsr.student_id
+         WHERE tsr.teacher_id = ?
+           AND tsr.status IN ('active', 'pending_confirm')
+           AND u.role = 'student'
+           AND u.deleted_at IS NULL
+         ORDER BY
+           CASE tsr.status
+             WHEN 'active' THEN 0
+             WHEN 'pending_confirm' THEN 1
+             ELSE 2
+           END,
+           tsr.created_at DESC`,
+        [req.user.id]
       );
 
       res.json({ students });
@@ -160,11 +169,11 @@ router.get(
       logger.error("获取学生列表失败:", error);
       res.status(500).json({ error: "获取学生列表失败" });
     }
-  },
+  }
 );
 
-// 🔴 核心修复：移除角色鉴权！允许已登录的所有用户访问此接口查询绑定的导师
- router.get("/my-tutor", authenticate, async (req, res) => {
+// 获取我的导师（学生查看绑定的导师）
+router.get("/my-tutor", authenticate, async (req, res) => {
   try {
     const [teachers] = await pool.execute(
       `SELECT u.id, u.username, u.real_name, u.avatar_url, u.email,
@@ -182,7 +191,7 @@ router.get(
   }
 });
 
-// 🔴 路由顺序修正：将静态常量路由置于动态路由 /:id 之前，防止请求被拦截
+// 获取待确认的导师申请列表
 router.get("/pending-teachers", authenticate, async (req, res) => {
   try {
     const [invitations] = await pool.execute(
@@ -239,64 +248,96 @@ router.post(
   authorize("teacher"),
   async (req, res) => {
     try {
-      const { student_username } = req.body;
+      const studentKeyword = String(req.body.student_username || "").trim();
 
-      // 🔴 核心修复：双重容错检索 - 先查username，再查real_name
-      // 如果输入的是账号，直接精确匹配；如果输入的是名字且学校唯一，也能成功绑定
+      if (!studentKeyword) {
+        return res.status(400).json({ error: "请输入学生账号或真实姓名" });
+      }
+
+      if (studentKeyword.length > 50) {
+        return res.status(400).json({ error: "学生账号或姓名过长" });
+      }
+
       const [students] = await pool.execute(
-        `SELECT id FROM users
+        `SELECT id, username, real_name, status
+         FROM users
          WHERE (username = ? OR real_name = ?)
-           AND role = "student"
-           AND status = "active"
+           AND role = 'student'
            AND deleted_at IS NULL`,
-        [student_username, student_username],
+        [studentKeyword, studentKeyword]
       );
 
       if (students.length === 0) {
-        return res
-          .status(404)
-          .json({ error: "未找到该学生，请核对学号或姓名是否正确" });
+        return res.status(404).json({ error: "未找到该学生，请核对学号或姓名是否正确" });
       }
 
       if (students.length > 1) {
         return res.status(400).json({
-          error: "存在同名学生，请让学生提供精确的【登录账号】进行绑定",
+          error: "存在同名学生，请让学生提供精确的登录账号进行绑定"
         });
       }
 
-      const studentId = students[0].id;
+      const student = students[0];
 
-      // 检查是否已建立关系
+      if (student.id === req.user.id) {
+        return res.status(400).json({ error: "不能添加自己为学生" });
+      }
+
+      if (student.status !== "active") {
+        return res.status(400).json({
+          error: "该学生账号尚未通过身份验证，不能建立导师关系"
+        });
+      }
+
       const [existing] = await pool.execute(
-        "SELECT id FROM teacher_student_relations WHERE teacher_id = ? AND student_id = ?",
-        [req.user.id, studentId],
+        `SELECT id, status
+         FROM teacher_student_relations
+         WHERE teacher_id = ? AND student_id = ?`,
+        [req.user.id, student.id]
       );
 
       if (existing.length > 0) {
-        return res.status(409).json({ error: "该学生已添加" });
+        const relation = existing[0];
+
+        if (relation.status === "active") {
+          return res.status(409).json({ error: "该学生已在您的学生列表中" });
+        }
+
+        if (relation.status === "pending_confirm") {
+          return res.status(409).json({ error: "已发送申请，请等待学生确认" });
+        }
+
+        await pool.execute(
+          `UPDATE teacher_student_relations
+           SET status = 'pending_confirm'
+           WHERE id = ?`,
+          [relation.id]
+        );
+      } else {
+        await pool.execute(
+          `INSERT INTO teacher_student_relations (teacher_id, student_id, status)
+           VALUES (?, ?, 'pending_confirm')`,
+          [req.user.id, student.id]
+        );
       }
 
       await pool.execute(
-         'INSERT INTO teacher_student_relations (teacher_id, student_id, status) VALUES (?, ?, "pending_confirm")',
-        [req.user.id, studentId],
+        `INSERT INTO notifications (user_id, type, title, content)
+         VALUES (?, 'system', '导师申请通知', ?)`,
+        [
+          student.id,
+          `导师 ${req.user.real_name || req.user.username} 申请将您添加为学生，请在"我的导师"中确认。`
+        ]
       );
 
-      // 通知学生
-      await pool.execute(
-        `INSERT INTO notifications (user_id, type, title, content)
-       VALUES (?, 'system', '导师申请通知', ?)`,
-        [
-          studentId,
-           `导师 ${req.user.real_name || req.user.username} 申请将您添加为学生，请在"我的导师"选项卡界面中同意`,
-        ],
-      );
+      logger.info(`导师添加学生申请: teacher=${req.user.id}, student=${student.id}`);
 
       res.json({ message: "学生申请已发送，请等待学生确认" });
     } catch (error) {
       logger.error("添加学生失败:", error);
       res.status(500).json({ error: "添加学生失败" });
     }
-  },
+  }
 );
 
 // ==================== 3. 动态拦截路由（垫底） ====================
@@ -357,7 +398,6 @@ router.get("/:id", authenticate, async (req, res) => {
   try {
     const userId = req.params.id;
 
-    // 只能查看自己或有权限查看的用户
     if (
       userId != req.user.id &&
       !["admin", "teacher"].includes(req.user.role)
@@ -366,7 +406,7 @@ router.get("/:id", authenticate, async (req, res) => {
     }
 
     const [users] = await pool.execute(
-      `SELECT id, username, real_name, avatar_url, role, status, 
+      `SELECT id, username, real_name, avatar_url, role, status,
               email_verified, phone_verified, id_verified,
               quota_total, quota_used, created_at, last_login_at
        FROM users WHERE id = ? AND deleted_at IS NULL`,
@@ -389,7 +429,6 @@ router.put("/me", authenticate, async (req, res) => {
     const { real_name, email, phone } = req.body;
     const userId = req.user.id;
 
-    // 1. 唯一性约束核验：防止修改后的邮箱与其他现存活跃用户的邮箱冲突
     if (email) {
       const [existingEmail] = await pool.execute(
         "SELECT id FROM users WHERE email = ? AND id != ? AND deleted_at IS NULL",
@@ -400,8 +439,6 @@ router.put("/me", authenticate, async (req, res) => {
       }
     }
 
-    // 2. 强类型字段防御：严禁直接解构入库，只允许修改 real_name, email, phone
-    // 彻底隔绝普通用户通过此接口提权修改 role, status 或 quota_total 的红线风险
     await pool.execute(
       "UPDATE users SET real_name = ?, email = ?, phone = ? WHERE id = ?",
       [real_name || null, email || null, phone || null, userId],
@@ -415,7 +452,7 @@ router.put("/me", authenticate, async (req, res) => {
   }
 });
 
-// 🔴 新增接口：学生同意/拒绝导师的认领申请
+// 学生同意/拒绝导师的认领申请
 router.put(
   "/relations/:relationId",
   authenticate,
@@ -433,8 +470,10 @@ router.put(
 
       // 验证关系记录是否存在且属于当前学生
       const [relations] = await pool.execute(
-        "SELECT id, teacher_id, student_id FROM teacher_student_relations WHERE id = ? AND student_id = ?",
-        [relationId, req.user.id],
+        `SELECT id, teacher_id, student_id, status
+         FROM teacher_student_relations
+         WHERE id = ? AND student_id = ?`,
+        [relationId, req.user.id]
       );
 
       if (relations.length === 0) {
@@ -443,14 +482,16 @@ router.put(
 
       const relation = relations[0];
 
+      if (relation.status !== "pending_confirm") {
+        return res.status(409).json({ error: "该申请已处理或状态不允许操作" });
+      }
+
       if (action === "accept") {
-        // 🔴 修正为数据库合规的 ENUM 字段值 'active'
         await pool.execute(
           'UPDATE teacher_student_relations SET status = "active" WHERE id = ?',
           [relationId],
         );
 
-        // 通知导师已接受
         await pool.execute(
           `INSERT INTO notifications (user_id, type, title, content)
        VALUES (?, 'system', '学生已确认', ?)`,
@@ -469,7 +510,6 @@ router.put(
           [relationId],
         );
 
-        // 通知导师已拒绝
         await pool.execute(
           `INSERT INTO notifications (user_id, type, title, content)
        VALUES (?, 'system', '学生已拒绝', ?)`,
@@ -489,8 +529,7 @@ router.put(
   },
 );
 
-
-// 🔴 核心功能补齐：撤回申请 / 导师移除学生 / 学生反解导师 统一控制节点
+// 撤回申请 / 导师移除学生 / 学生反解导师 统一控制节点
 router.delete("/relations/:relationId", authenticate, async (req, res) => {
   try {
     const relationId = req.params.relationId;
@@ -507,7 +546,6 @@ router.delete("/relations/:relationId", authenticate, async (req, res) => {
 
     const relation = relations[0];
 
-    // 鉴权安全拦截：只有当事导师或当事学生本人有权执行销毁
     if (relation.teacher_id !== userId && relation.student_id !== userId) {
       return res.status(403).json({ error: "越权访问：无权操作此关联关系" });
     }
@@ -516,7 +554,7 @@ router.delete("/relations/:relationId", authenticate, async (req, res) => {
       relationId,
     ]);
 
-    logger.info(`师生防线数据解除: id=${relationId}, 操作者=${userId}`);
+    logger.info(`师生关系解除: id=${relationId}, 操作者=${userId}`);
     res.json({
       message:
         relation.status === "pending_confirm" ? "申请已成功撤回" : "师生绑定关系已解除",
