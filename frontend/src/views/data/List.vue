@@ -1,15 +1,20 @@
 <template>
   <div class="page-container">
     <div class="page-header">
-      <h2 class="page-title">{{ isViewingStudent ? `${studentName} 的数据` : '我的数据' }}</h2>
+      <h2 class="page-title">
+        {{ isViewingStudent ? `${studentName} 的数据` : '我的数据' }}
+      </h2>
+
       <el-button v-if="!isViewingStudent" type="primary" @click="$router.push('/data/upload')">
-        <el-icon><Plus /></el-icon>
+        <el-icon>
+          <Plus />
+        </el-icon>
         上传新数据
       </el-button>
-      <el-button v-if="isViewingStudent" @click="$router.back()">返回</el-button>
+
+      <el-button v-else @click="$router.back()">返回</el-button>
     </div>
-    
-    <!-- 筛选栏 -->
+
     <el-card class="filter-card">
       <el-form :model="filters" inline>
         <el-form-item label="状态">
@@ -21,7 +26,7 @@
             <el-option label="已拒绝" value="final_rejected" />
           </el-select>
         </el-form-item>
-        
+
         <el-form-item label="数据类型">
           <el-select v-model="filters.data_type" placeholder="全部类型" clearable>
             <el-option label="原始数据" value="raw" />
@@ -30,29 +35,32 @@
             <el-option label="总结报告" value="summary" />
           </el-select>
         </el-form-item>
-        
+
         <el-form-item>
           <el-button type="primary" @click="fetchData">筛选</el-button>
           <el-button @click="resetFilters">重置</el-button>
         </el-form-item>
       </el-form>
     </el-card>
-    
-    <!-- 数据列表 -->
+
     <el-card>
       <el-table :data="dataList" v-loading="loading" style="width: 100%">
         <el-table-column prop="title" label="标题" min-width="200">
           <template #default="{ row }">
-            <el-link type="primary" @click="viewDetail(row.id)">{{ row.title }}</el-link>
+            <el-link type="primary" @click="viewDetail(row.id)">
+              {{ row.title }}
+            </el-link>
           </template>
         </el-table-column>
-        
+
         <el-table-column prop="data_type" label="类型" width="100">
           <template #default="{ row }">
-            <el-tag size="small">{{ typeMap[row.data_type] }}</el-tag>
+            <el-tag size="small">
+              {{ typeMap[row.data_type] }}
+            </el-tag>
           </template>
         </el-table-column>
-        
+
         <el-table-column prop="review_status" label="审核状态" width="140">
           <template #default="{ row }">
             <el-tag :type="statusType[row.review_status]" size="small">
@@ -60,39 +68,50 @@
             </el-tag>
           </template>
         </el-table-column>
-        
+
         <el-table-column prop="review_progress" label="进度" width="120">
           <template #default="{ row }">
             <el-progress :percentage="row.review_progress" :stroke-width="8" />
           </template>
         </el-table-column>
-        
+
         <el-table-column prop="ai_check_score" label="AI评分" width="100">
           <template #default="{ row }">
-            <el-tag v-if="row.ai_check_score" :type="getScoreType(row.ai_check_score)" size="small">
+            <el-tag
+              v-if="row.ai_check_score"
+              :type="getScoreType(row.ai_check_score)"
+              size="small"
+            >
               {{ row.ai_check_score }}
             </el-tag>
             <span v-else>-</span>
           </template>
         </el-table-column>
-        
+
         <el-table-column prop="ai_anomaly_detected" label="异常" width="80">
           <template #default="{ row }">
-            <el-tag v-if="row.ai_anomaly_detected === 1" type="danger" size="small">有</el-tag>
-            <el-tag v-else-if="row.ai_check_status === 'completed'" type="success" size="small">无</el-tag>
+            <el-tag v-if="row.ai_anomaly_detected === 1" type="danger" size="small">
+              有
+            </el-tag>
+            <el-tag v-else-if="row.ai_check_status === 'completed'" type="success" size="small">
+              无
+            </el-tag>
             <span v-else>-</span>
           </template>
         </el-table-column>
-        
+
         <el-table-column prop="created_at" label="上传时间" width="180">
           <template #default="{ row }">
             {{ formatDate(row.created_at) }}
           </template>
         </el-table-column>
-        
+
         <el-table-column label="操作" width="200" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" @click="viewDetail(row.id)">查看</el-button>
+            <el-button link type="primary" @click="viewDetail(row.id)">
+              查看
+            </el-button>
+
             <el-button
               v-if="!isViewingStudent && canSubmit(row.review_status)"
               link
@@ -101,6 +120,7 @@
             >
               提交审核
             </el-button>
+
             <el-button
               v-if="!isViewingStudent && canDelete(row.review_status)"
               link
@@ -112,8 +132,7 @@
           </template>
         </el-table-column>
       </el-table>
-      
-      <!-- 分页 -->
+
       <div class="pagination-container">
         <el-pagination
           v-model:current-page="pagination.page"
@@ -126,26 +145,27 @@
         />
       </div>
     </el-card>
-    
-    <!-- 提交审核对话框 -->
+
     <el-dialog v-model="submitDialogVisible" title="提交审核" width="500px">
       <el-form :model="submitForm" label-width="100px">
         <el-form-item label="选择导师">
           <el-select v-model="submitForm.teacher_id" placeholder="请选择导师" class="w-full">
-            <el-option 
-              v-for="teacher in teachers" 
-              :key="teacher.id" 
-              :label="teacher.real_name || teacher.username" 
-              :value="teacher.id" 
+            <el-option
+              v-for="teacher in teachers"
+              :key="teacher.id"
+              :label="teacher.real_name || teacher.username"
+              :value="teacher.id"
             />
           </el-select>
         </el-form-item>
+
         <el-form-item>
           <el-checkbox v-model="submitForm.liability_accepted">
             确认数据真实有效，接受责任声明
           </el-checkbox>
         </el-form-item>
       </el-form>
+
       <template #footer>
         <el-button @click="submitDialogVisible = false">取消</el-button>
         <el-button type="primary" @click="confirmSubmit">确认提交</el-button>
