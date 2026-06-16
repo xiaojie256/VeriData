@@ -50,10 +50,14 @@ api.interceptors.response.use(
       }
 
       // 修改：如果本身就在登录页发起的登录，必须正常抛出错误，供登录组件捕获关闭转圈并报错
-      return Promise.reject(error.response?.data || error);
+      return Promise.reject(error.response?.data || {
+        error: error.message || '网络异常，请稍后重试'
+      });
     }
 
-    return Promise.reject(error.response?.data || error);
+    return Promise.reject(error.response?.data || {
+      error: error.message || '网络异常，请稍后重试'
+    });
   },
 );
 

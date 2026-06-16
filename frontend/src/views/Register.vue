@@ -5,22 +5,22 @@
         <h1>注册账号</h1>
         <p>加入鉴真数据平台</p>
       </div>
-      
-      <el-form 
-        ref="formRef" 
-        :model="form" 
-        :rules="rules" 
+
+      <el-form
+        ref="formRef"
+        :model="form"
+        :rules="rules"
         @submit.prevent="handleRegister"
         class="register-form"
       >
         <el-form-item prop="username">
           <el-input v-model="form.username" placeholder="用户名" :prefix-icon="User" />
         </el-form-item>
-        
+
         <el-form-item prop="email">
           <el-input v-model="form.email" placeholder="邮箱" :prefix-icon="Message" />
         </el-form-item>
-        
+
         <el-form-item prop="code">
           <div style="display: flex; gap: 10px; width: 100%;">
             <el-input v-model="form.code" placeholder="6位验证码" />
@@ -33,7 +33,7 @@
         <el-form-item prop="real_name">
           <el-input v-model="form.real_name" placeholder="真实姓名" :prefix-icon="UserFilled" />
         </el-form-item>
-        
+
         <el-form-item prop="role">
           <el-select v-model="form.role" placeholder="选择角色" class="w-full">
             <el-option label="学生" value="student" />
@@ -42,22 +42,22 @@
             <el-option label="普通用户" value="civilian" />
           </el-select>
         </el-form-item>
-        
+
         <el-form-item prop="password">
           <el-input v-model="form.password" type="password" placeholder="密码" :prefix-icon="Lock" show-password />
         </el-form-item>
-        
+
         <el-form-item prop="confirmPassword">
           <el-input v-model="form.confirmPassword" type="password" placeholder="确认密码" :prefix-icon="Lock" show-password />
         </el-form-item>
-        
+
         <el-form-item>
           <el-button type="primary" :loading="loading" @click="handleRegister" class="w-full">
             注册
           </el-button>
         </el-form-item>
       </el-form>
-      
+
       <div class="register-footer">
         <el-link type="primary" @click="$router.push('/login')">已有账号？立即登录</el-link>
       </div>
@@ -91,38 +91,60 @@ const form = reactive({
 const countdown = ref(0)
 let timer = null
 
+const getErrorMessage = (error, fallback = '操作失败') => {
+  if (!error) return fallback
+  if (typeof error === 'string') return error
+  if (error.error) return error.error
+  if (error.message) return error.message
+  if (error.details?.[0]?.msg) return error.details[0].msg
+
+  return fallback
+}
+
+const normalizeRegisterForm = () => {
+  form.username = form.username.trim()
+  form.email = form.email.trim().toLowerCase()
+  form.code = form.code.trim()
+  form.real_name = form.real_name.trim()
+}
+
 const sendRegisterCode = async () => {
+  form.email = form.email.trim().toLowerCase()
+
   if (!form.email) {
     ElMessage.warning('请先输入邮箱地址')
     return
   }
-  // 简单验证邮箱格式是否正确
+
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
   if (!emailRegex.test(form.email)) {
     ElMessage.warning('请输入正确的邮箱格式')
     return
   }
 
   try {
-    // 调用后端新写的发送验证码接口
     await api.post('/auth/send-code', {
       email: form.email,
       type: 'register'
     })
-    
+
     ElMessage.success('验证码已发送，请注意查收')
-    
-    // 启动 60 秒倒计时
+
     countdown.value = 60
+
+    if (timer) clearInterval(timer)
+
     timer = setInterval(() => {
       countdown.value--
+
       if (countdown.value <= 0) {
         clearInterval(timer)
+        timer = null
       }
     }, 1000)
-    
   } catch (error) {
-    ElMessage.error(error.error || '验证码发送失败，请稍后重试')
+    ElMessage.error(getErrorMessage(error, '验证码发送失败，请稍后重试'))
   }
 }
 
@@ -144,12 +166,18 @@ const rules = {
     { required: true, message: '请输入用户名', trigger: 'blur' },
     { min: 3, max: 50, message: '长度在 3 到 50 个字符', trigger: 'blur' },
     // 新增：利用 pattern 属性加入正则校验，拦截非法字符
-    { pattern: /^[a-zA-Z0-9\u4e00-\u9fa5]+$/, message: '用户名只能由字母、数字与汉字组成', trigger: 'blur' }
+    { pattern: /^[a-zA-Z0-9一-龥]+$/, message: '用户名只能由字母、数字与汉字组成', trigger: 'blur' }
   ],
   email: [
     { required: true, message: '请输入邮箱', trigger: 'blur' },
     { type: 'email', message: '邮箱格式不正确', trigger: 'blur' }
   ],
+
+  code: [
+    { required: true, message: '请输入邮箱验证码', trigger: 'blur' },
+    { pattern: /^\d{6}$/, message: '请输入6位数字邮箱验证码', trigger: 'blur' }
+  ],
+
   real_name: [{ required: true, message: '请输入真实姓名', trigger: 'blur' }],
   role: [{ required: true, message: '请选择角色', trigger: 'change' }],
   password: [
@@ -166,16 +194,27 @@ const rules = {
 
 const handleRegister = async () => {
   try {
+    normalizeRegisterForm()
+
     await formRef.value.validate()
+
     loading.value = true
-    
-    const { confirmPassword, ...registerData } = form
+
+    const registerData = {
+      username: form.username,
+      email: form.email,
+      code: form.code,
+      real_name: form.real_name,
+      role: form.role,
+      password: form.password
+    }
+
     await store.dispatch('register', registerData)
-    
+
     ElMessage.success('注册成功')
     router.push('/dashboard')
   } catch (error) {
-    ElMessage.error(error.error || '注册失败')
+    ElMessage.error(getErrorMessage(error, '注册失败'))
   } finally {
     loading.value = false
   }

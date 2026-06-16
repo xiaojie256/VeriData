@@ -15,6 +15,41 @@ const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
 const redisClient = require('../utils/redis'); // 利用系统已配置的 Redis
 const { sendCodeEmail } = require('../utils/mailer');
 
+const normalizeEmail = (email) => String(email || '').trim().toLowerCase();
+
+const normalizeText = (value) => String(value || '').trim();
+
+const buildValidationErrorResponse = (errors) => {
+  const list = errors.array();
+
+  const fieldMap = {};
+  for (const item of list) {
+    if (!fieldMap[item.path]) {
+      fieldMap[item.path] = item.msg;
+    }
+  }
+
+  return {
+    error: list[0]?.msg || '表单填写有误，请检查后重试',
+    details: list,
+    fieldErrors: fieldMap
+  };
+};
+
+const getDuplicateRegisterMessage = (error) => {
+  const message = String(error?.sqlMessage || error?.message || '');
+
+  if (message.includes('users.username') || message.includes('username')) {
+    return '用户名已被注册，请更换用户名';
+  }
+
+  if (message.includes('users.email') || message.includes('email')) {
+    return '该邮箱已被注册，请更换邮箱';
+  }
+
+  return '用户名或邮箱已被占用，请更换后重试';
+};
+
 // 确保JWT密钥已设置
 if (!JWT_SECRET) {
   throw new Error('JWT_SECRET 环境变量未设置');
@@ -37,7 +72,7 @@ router.post('/send-code', [
 
     // 生成6位随机数字验证码
     const code = Math.floor(100000 + Math.random() * 900000).toString();
-    
+
     // 存入 Redis，有效期 5 分钟 (300秒)
     const redisKey = `mail_code:${email}:${type}`;
     await redisClient.set(redisKey, code, { EX: 300 });
@@ -46,7 +81,7 @@ router.post('/send-code', [
 
     // 发送邮件
     await sendCodeEmail(email, code, type);
-    
+
     logger.info(`验证码已发往: ${email}, 类型: ${type}`);
     res.json({ message: '验证码已成功发送至您的邮箱' });
   } catch (error) {
@@ -57,23 +92,59 @@ router.post('/send-code', [
 
 // 注册
 router.post('/register', [
-  body('username').isLength({ min: 3, max: 50 }).matches(/^[a-zA-Z0-9\u4e00-\u9fa5]+$/).withMessage('用户名只能由字母、数字与汉字组成'),
-  body('email').isEmail().withMessage('邮箱格式不正确'),
-  body('password').isLength({ min: 6 }).matches(/^(?=.*[a-zA-Z])(?=.*\d)/).withMessage('密码必须同时包含字母与数字'),
-  body('code').isLength({ min: 6, max: 6 }).withMessage('请输入6位邮箱验证码'),
+  body('username')
+    .trim()
+    .notEmpty().withMessage('请输入用户名')
+    .bail()
+    .isLength({ min: 3, max: 50 }).withMessage('用户名长度必须为3到50个字符')
+    .bail()
+    .matches(/^[a-zA-Z0-9一-龥]+$/).withMessage('用户名只能由字母、数字与汉字组成'),
+
+  body('email')
+    .trim()
+    .normalizeEmail()
+    .notEmpty().withMessage('请输入邮箱')
+    .bail()
+    .isEmail().withMessage('邮箱格式不正确'),
+
+  body('password')
+    .notEmpty().withMessage('请输入密码')
+    .bail()
+    .isLength({ min: 6 }).withMessage('密码长度至少为6个字符')
+    .bail()
+    .matches(/^(?=.*[a-zA-Z])(?=.*\d)/).withMessage('密码必须同时包含字母与数字'),
+
+  body('code')
+    .trim()
+    .notEmpty().withMessage('请输入邮箱验证码')
+    .bail()
+    .matches(/^\d{6}$/).withMessage('请输入6位数字邮箱验证码'),
+
+  body('real_name')
+    .trim()
+    .notEmpty().withMessage('请输入真实姓名'),
+
   body('role')
-    .optional()
+    .trim()
+    .notEmpty().withMessage('请选择注册角色')
+    .bail()
     .isIn(['civilian', 'student', 'teacher', 'expert'])
     .withMessage('无效的注册角色')
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      return res.status(400).json({ error: '验证失败', details: errors.array() });
+      return res.status(400).json(buildValidationErrorResponse(errors));
     }
 
-    const { username, email, password, code, real_name, phone } = req.body;
-    const role = req.body.role || 'civilian';
+    const username = normalizeText(req.body.username);
+    const email = normalizeEmail(req.body.email);
+    const password = req.body.password;
+    const code = normalizeText(req.body.code);
+    const real_name = normalizeText(req.body.real_name);
+    const phone = req.body.phone ? normalizeText(req.body.phone) : null;
+
+    const role = normalizeText(req.body.role || 'civilian');
 
     const allowedSelfRegisterRoles = ['civilian', 'student', 'teacher', 'expert'];
     if (!allowedSelfRegisterRoles.includes(role)) {
@@ -84,25 +155,40 @@ router.post('/register', [
     const redisKey = `mail_code:${email}:register`;
     const cachedCode = await redisClient.get(redisKey);
     if (!cachedCode || cachedCode !== code) {
-      return res.status(400).json({ error: '验证码错误或已过期' });
+      return res.status(400).json({
+        error: '验证码错误或已过期，请重新获取验证码',
+        field: 'code'
+      });
     }
 
     // 2. 同名处理：单独精准检查用户名
     const [existingUsername] = await pool.execute(
-      'SELECT id FROM users WHERE username = ? AND deleted_at IS NULL',
+      'SELECT id, deleted_at FROM users WHERE username = ? LIMIT 1',
       [username]
     );
+
     if (existingUsername.length > 0) {
-      return res.status(409).json({ error: '用户名已被注册' });
+      return res.status(409).json({
+        error: existingUsername[0].deleted_at
+          ? '该用户名曾被使用并已删除，请更换用户名'
+          : '用户名已被注册，请更换用户名',
+        field: 'username'
+      });
     }
 
     // 3. 同邮箱处理：单独精准检查邮箱
     const [existingEmail] = await pool.execute(
-      'SELECT id FROM users WHERE email = ? AND deleted_at IS NULL',
+      'SELECT id, deleted_at FROM users WHERE email = ? LIMIT 1',
       [email]
     );
+
     if (existingEmail.length > 0) {
-      return res.status(409).json({ error: '该邮箱已被注册' });
+      return res.status(409).json({
+        error: existingEmail[0].deleted_at
+          ? '该邮箱曾被使用并已删除，请更换邮箱'
+          : '该邮箱已被注册，请更换邮箱',
+        field: 'email'
+      });
     }
 
     // 4. 密码加盐加密（确保此行未丢失）
@@ -110,16 +196,16 @@ router.post('/register', [
 
     // 5. 执行数据库安全插入
     const [result] = await pool.execute(
-      `INSERT INTO users (username, email, password_hash, real_name, role, phone, status, quota_total) 
+      `INSERT INTO users (username, email, password_hash, real_name, role, phone, status, quota_total)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        username, 
-        email, 
-        passwordHash, 
-        real_name || null, 
-        role, 
-        phone || null, 
-        role === 'civilian' ? 'active' : 'pending_verification', 
+        username,
+        email,
+        passwordHash,
+        real_name || null,
+        role,
+        phone || null,
+        role === 'civilian' ? 'active' : 'pending_verification',
         role === 'civilian' ? 5 : 10
       ]
     );
@@ -146,7 +232,21 @@ router.post('/register', [
     }, '注册成功'));
 
   } catch (error) {
-    // 捕获并记录核心崩溃日志
+    if (error.code === 'ER_DUP_ENTRY') {
+      const message = getDuplicateRegisterMessage(error);
+
+      logger.warn('注册失败：用户名或邮箱触发唯一键冲突', {
+        username: req.body?.username,
+        email: req.body?.email,
+        sqlMessage: error.sqlMessage
+      });
+
+      return res.status(409).json({
+        error: message,
+        field: message.includes('用户名') ? 'username' : message.includes('邮箱') ? 'email' : undefined
+      });
+    }
+
     logger.error('注册路由执行崩溃:', error);
     res.status(500).json({ error: '注册失败，请稍后重试' });
   }
@@ -168,7 +268,7 @@ router.post('/login', [
 
     // 查询用户
     const [users] = await pool.execute(
-      `SELECT id, username, email, password_hash, role, real_name, avatar_url, status, 
+      `SELECT id, username, email, password_hash, role, real_name, avatar_url, status,
               login_fail_count, locked_until, quota_total, quota_used
        FROM users WHERE (username = ? OR email = ?) AND deleted_at IS NULL`,
       [account, account]
@@ -182,9 +282,9 @@ router.post('/login', [
 
     // 检查账号锁定
     if (user.locked_until && new Date(user.locked_until) > new Date()) {
-      return res.status(403).json({ 
-        error: '账号已锁定', 
-        lockedUntil: user.locked_until 
+      return res.status(403).json({
+        error: '账号已锁定',
+        lockedUntil: user.locked_until
       });
     }
 
@@ -195,14 +295,14 @@ router.post('/login', [
 
     // 验证密码
     const isValid = await bcrypt.compare(password, user.password_hash);
-    
+
     if (!isValid) {
       // 更新失败次数
       await pool.execute(
         'UPDATE users SET login_fail_count = login_fail_count + 1 WHERE id = ?',
         [user.id]
       );
-      
+
       // 失败5次锁定30分钟
       if (user.login_fail_count + 1 >= 5) {
         await pool.execute(
@@ -210,7 +310,7 @@ router.post('/login', [
           [user.id]
         );
       }
-      
+
       return res.status(401).json({ error: '账号或密码错误' });
     }
 
@@ -315,9 +415,9 @@ router.post('/avatar', authenticate, (req, res, next) => {
       [avatarUrl, req.user.id]
     );
 
-    res.json({ 
-      message: '头像上传成功', 
-      avatar_url: avatarUrl 
+    res.json({
+      message: '头像上传成功',
+      avatar_url: avatarUrl
     });
   } catch (error) {
     logger.error('上传头像失败:', error);

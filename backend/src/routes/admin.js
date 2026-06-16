@@ -584,7 +584,12 @@ router.delete(
       }
 
       await pool.execute(
-        "UPDATE users SET deleted_at = NOW(), status = 'suspended' WHERE id = ?",
+        `UPDATE users SET
+           deleted_at = NOW(),
+           status = 'suspended',
+           username = CONCAT(username, '_deleted_', id),
+           email = CONCAT('deleted_', id, '_', email)
+         WHERE id = ?`,
         [targetUserId],
       );
 
