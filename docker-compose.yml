@@ -77,6 +77,7 @@ services:
       - "5000:5000"
     volumes:
       - ./ai-service/models:/app/models
+      - ./uploads:/app/uploads:ro
       - ./logs:/app/logs
     networks:
       - veri-data-network

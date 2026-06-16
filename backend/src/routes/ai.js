@@ -75,11 +75,23 @@ router.post('/analyze/:dataId', authenticate, async (req, res) => {
       
       logger.info(`AI检测完成: data_id=${dataId}, score=${result.score}`);
     }).catch(async (error) => {
+      const errorMessage = error.response?.data?.error || error.message || 'AI检测失败'
+
       await pool.execute(
-        'UPDATE data_submissions SET ai_check_status = ? WHERE id = ?',
-        ['failed', dataId]
+        `UPDATE data_submissions
+         SET ai_check_status = ?,
+             ai_check_result = ?,
+             ai_check_score = NULL,
+             ai_anomaly_detected = 1
+         WHERE id = ?`,
+        [
+          'failed',
+          JSON.stringify({ error: errorMessage }),
+          dataId
+        ]
       );
-      logger.error(`AI检测失败: data_id=${dataId}, error=${error.message}`);
+
+      logger.error(`AI检测失败: data_id=${dataId}, error=${errorMessage}`);
     });
 
     res.json({ message: 'AI检测已启动' });

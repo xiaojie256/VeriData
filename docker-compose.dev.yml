@@ -46,6 +46,7 @@ services:
     volumes:
       - ./ai-service:/app
       - ./ai-service/models:/app/models
+      - ./uploads:/app/uploads:ro
       - ./logs:/app/logs
     environment:
       FLASK_ENV: development

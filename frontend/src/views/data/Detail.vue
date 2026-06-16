@@ -49,9 +49,22 @@
           <template #header>
             <div class="card-header">
               <span>AI检测结果</span>
-              <el-tag v-if="data?.ai_check_status === 'completed'" type="success">已完成</el-tag>
-              <el-tag v-else-if="data?.ai_check_status === 'running'" type="warning">检测中</el-tag>
-              <el-tag v-else type="info">待检测</el-tag>
+              <div class="ai-header-actions">
+                <el-tag v-if="data?.ai_check_status === 'completed'" type="success">已完成</el-tag>
+                <el-tag v-else-if="data?.ai_check_status === 'running'" type="warning">检测中</el-tag>
+                <el-tag v-else-if="data?.ai_check_status === 'failed'" type="danger">检测失败</el-tag>
+                <el-tag v-else type="info">待检测</el-tag>
+
+                <el-button
+                  v-if="!data?.ai_check_status || data?.ai_check_status === 'pending' || data?.ai_check_status === 'failed'"
+                  size="small"
+                  type="primary"
+                  :loading="aiRetryLoading"
+                  @click="triggerAiAnalysis"
+                >
+                  重新检测
+                </el-button>
+              </div>
             </div>
           </template>
           
@@ -202,6 +215,7 @@ const submitDialogVisible = ref(false)
 const teacher = ref(null)
 const teacherLoading = ref(false)
 const submitLoading = ref(false)
+const aiRetryLoading = ref(false)
 
 const statusMap = {
   'draft': '草稿',
@@ -289,8 +303,15 @@ const currentStep = computed(() => {
 
 const aiStatusText = computed(() => {
   if (!data.value) return '待检测'
-  if (data.value.ai_check_status === 'completed') return `评分: ${data.value.ai_check_score}`
+
+  if (data.value.ai_check_status === 'completed') {
+    return `评分: ${data.value.ai_check_score ?? '-'}`
+  }
+
   if (data.value.ai_check_status === 'running') return '检测中'
+
+  if (data.value.ai_check_status === 'failed') return '检测失败，可重新检测'
+
   return '待检测'
 })
 
@@ -331,6 +352,21 @@ const fetchData = async () => {
     if (error?.error === '数据不存在' || error?.error === '无权查看此数据') {
       router.push('/data/list')
     }
+  }
+}
+
+const triggerAiAnalysis = async () => {
+  aiRetryLoading.value = true
+
+  try {
+    await api.post(`/ai/analyze/${route.params.id}`)
+    ElMessage.success('AI检测已启动')
+    await fetchData()
+  } catch (err) {
+    const msg = err?.error || 'AI检测启动失败，请检查AI服务是否正常'
+    ElMessage.error(msg)
+  } finally {
+    aiRetryLoading.value = false
   }
 }
 
@@ -404,6 +440,12 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.ai-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .description-section {

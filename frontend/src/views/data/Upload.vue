@@ -210,8 +210,9 @@ const handleSubmit = async () => {
     // 触发AI分析
     try {
       await api.post(`/ai/analyze/${response.data_id}`)
-    } catch {
-      // AI分析失败不影响主流程
+    } catch (aiError) {
+      console.error('AI分析启动失败:', aiError)
+      ElMessage.warning(aiError?.error || '数据已上传，但AI检测启动失败，可在详情页重新检测')
     }
     
     // 刷新用户额度信息
