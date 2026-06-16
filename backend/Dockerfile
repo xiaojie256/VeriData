@@ -1,4 +1,5 @@
-FROM node:18-alpine
+ARG NODE_IMAGE=node:18-alpine
+FROM ${NODE_IMAGE}
 
 WORKDIR /app
 

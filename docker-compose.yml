@@ -1,9 +1,7 @@
-version: '3.8'
-
 services:
   # MySQL数据库
   mysql:
-    image: mysql:8.0
+    image: ${MYSQL_IMAGE:-mysql:8.0}
     container_name: veri-data-mysql
     restart: unless-stopped
     environment:
@@ -20,7 +18,7 @@ services:
 
   # Redis缓存
   redis:
-    image: redis:7-alpine
+    image: ${REDIS_IMAGE:-redis:7-alpine}
     container_name: veri-data-redis
     restart: unless-stopped
     ports:
@@ -33,6 +31,8 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      args:
+        NODE_IMAGE: ${BACKEND_NODE_IMAGE:-node:18-alpine}
     container_name: veri-data-backend
     restart: unless-stopped
     command: npm run dev
@@ -66,6 +66,8 @@ services:
     build:
       context: ./ai-service
       dockerfile: Dockerfile
+      args:
+        PYTHON_IMAGE: ${AI_PYTHON_IMAGE:-python:3.9-slim}
     container_name: veri-data-ai
     restart: unless-stopped
     environment:
@@ -84,6 +86,9 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        NODE_IMAGE: ${FRONTEND_NODE_IMAGE:-node:18-alpine}
+        NGINX_IMAGE: ${FRONTEND_NGINX_IMAGE:-nginx:alpine}
     container_name: veri-data-frontend
     restart: unless-stopped
     ports:

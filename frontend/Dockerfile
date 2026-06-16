@@ -1,5 +1,8 @@
 # 构建阶段
-FROM node:18-alpine as build-stage
+ARG NODE_IMAGE=node:18-alpine
+ARG NGINX_IMAGE=nginx:alpine
+
+FROM ${NODE_IMAGE} AS build-stage
 
 # 设置字符集环境变量
 ENV LANG=zh_CN.UTF-8
@@ -15,7 +18,7 @@ COPY . .
 RUN npm run build
 
 # 生产阶段
-FROM nginx:alpine as production-stage
+FROM ${NGINX_IMAGE} AS production-stage
 
 COPY --from=build-stage /app/dist /usr/share/nginx/html
 
