@@ -60,7 +60,11 @@ router.post('/register', [
   body('username').isLength({ min: 3, max: 50 }).matches(/^[a-zA-Z0-9\u4e00-\u9fa5]+$/).withMessage('用户名只能由字母、数字与汉字组成'),
   body('email').isEmail().withMessage('邮箱格式不正确'),
   body('password').isLength({ min: 6 }).matches(/^(?=.*[a-zA-Z])(?=.*\d)/).withMessage('密码必须同时包含字母与数字'),
-  body('code').isLength({ min: 6, max: 6 }).withMessage('请输入6位邮箱验证码')
+  body('code').isLength({ min: 6, max: 6 }).withMessage('请输入6位邮箱验证码'),
+  body('role')
+    .optional()
+    .isIn(['civilian', 'student', 'teacher', 'expert'])
+    .withMessage('无效的注册角色')
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -68,7 +72,13 @@ router.post('/register', [
       return res.status(400).json({ error: '验证失败', details: errors.array() });
     }
 
-    const { username, email, password, code, real_name, role = 'civilian', phone } = req.body;
+    const { username, email, password, code, real_name, phone } = req.body;
+    const role = req.body.role || 'civilian';
+
+    const allowedSelfRegisterRoles = ['civilian', 'student', 'teacher', 'expert'];
+    if (!allowedSelfRegisterRoles.includes(role)) {
+      return res.status(400).json({ error: '无效的注册角色' });
+    }
 
     // 1. 验证码 Redis 一致性核验
     const redisKey = `mail_code:${email}:register`;

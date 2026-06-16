@@ -73,10 +73,18 @@ function validateEnv() {
     if (!process.env.DB_PASSWORD || process.env.DB_PASSWORD.length < 12) {
       errors.push('生产环境数据库密码必须至少12个字符');
     }
-    
+
     if (process.env.CORS_ORIGIN === '*') {
       errors.push('生产环境不允许 CORS 设置为 *');
     }
+
+    // 生产环境邮件配置校验：注册验证码是核心流程，缺失应在启动时暴露
+    const requiredMailVars = ['SMTP_HOST', 'SMTP_PORT', 'SMTP_USER', 'SMTP_PASS'];
+    requiredMailVars.forEach((varName) => {
+      if (!process.env[varName]) {
+        errors.push(`生产环境缺少邮件配置: ${varName}`);
+      }
+    });
   }
   
   if (errors.length > 0) {

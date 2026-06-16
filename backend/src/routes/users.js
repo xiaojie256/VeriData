@@ -30,7 +30,7 @@ router.get(
 
       // 教师只能查看自己的学生
       if (req.user.role === "teacher") {
-        // 🔴 安全重构：将 "active" 修正为 "accepted"，防止 pending 状态下泄露学生基础档案
+        // 仅允许教师查看已确认(active)关系下的学生，防止 pending_confirm 状态泄露学生基础档案
         whereClause +=
           ' AND id IN (SELECT student_id FROM teacher_student_relations WHERE teacher_id = ? AND status = "active")';
         params.push(req.user.id);
@@ -244,7 +244,11 @@ router.post(
       // 🔴 核心修复：双重容错检索 - 先查username，再查real_name
       // 如果输入的是账号，直接精确匹配；如果输入的是名字且学校唯一，也能成功绑定
       const [students] = await pool.execute(
-        'SELECT id FROM users WHERE (username = ? OR real_name = ?) AND role = "student"',
+        `SELECT id FROM users
+         WHERE (username = ? OR real_name = ?)
+           AND role = "student"
+           AND status = "active"
+           AND deleted_at IS NULL`,
         [student_username, student_username],
       );
 

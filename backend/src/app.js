@@ -3,6 +3,7 @@ const cors = require("cors");
 const helmet = require("helmet");
 const morgan = require("morgan");
 const rateLimit = require("express-rate-limit");
+const path = require("path");
 require("dotenv").config();
 
 // 环境变量验证（必须在最前面）
@@ -33,15 +34,18 @@ const API_PREFIX = `/api/${API_VERSION}`;
 
 // 安全中间件
 app.use(helmet());
-app.use(
-  cors({
-    origin:
-      process.env.NODE_ENV === "production"
-        ? ["https://veri-data.edu.cn"]
-        : "*",
-    credentials: true,
-  }),
-);
+
+// CORS 配置：优先读取 CORS_ORIGIN 环境变量，支持多域名逗号分隔
+const corsOrigin = process.env.CORS_ORIGIN
+  ? process.env.CORS_ORIGIN.split(",").map((item) => item.trim()).filter(Boolean)
+  : process.env.NODE_ENV === "production"
+    ? ["https://veri-data.edu.cn"]
+    : true;
+
+app.use(cors({
+  origin: corsOrigin,
+  credentials: true,
+}));
 
 // 限流配置
 const generalLimiter = rateLimit({
@@ -77,8 +81,18 @@ app.use(
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
-// 静态文件
-app.use("/uploads", express.static(process.env.UPLOAD_PATH || "./uploads"));
+// 静态文件：只允许公开头像目录，科研数据和证件照必须通过鉴权接口访问
+const uploadRoot = path.resolve(process.env.UPLOAD_PATH || "./uploads");
+
+app.use(
+  "/uploads/avatars",
+  express.static(path.join(uploadRoot, "avatars"), {
+    fallthrough: false,
+    dotfiles: "deny",
+    index: false,
+    maxAge: process.env.NODE_ENV === "production" ? "7d" : 0,
+  }),
+);
 
 // 路由注册 - 同时支持带版本前缀和不带版本前缀的API
 // 这样前端使用 /api/data 或 /api/v1/data 都能正常工作

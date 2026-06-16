@@ -18,6 +18,26 @@ const calculateFileHash = (filePath) => {
   return crypto.createHash('sha256').update(fileBuffer).digest('hex');
 };
 
+// 格式归一化：将文件扩展名映射为数据库枚举值
+const normalizeDataFormat = (filename) => {
+  const ext = path.extname(filename).toLowerCase();
+
+  const formatMap = {
+    ".csv": "csv",
+    ".xlsx": "excel",
+    ".xls": "excel",
+    ".json": "json",
+    ".txt": "txt",
+    ".pdf": "pdf",
+    ".jpg": "image",
+    ".jpeg": "image",
+    ".png": "image",
+    ".gif": "image",
+  };
+
+  return formatMap[ext] || "other";
+};
+
 // 检查配额
 const checkQuota = async (userId) => {
   const [users] = await pool.execute(
@@ -90,7 +110,7 @@ router.post('/upload', authenticate, authorize('student', 'teacher', 'admin', 'c
           title || req.file.originalname,
           description || null,
           data_type,
-          path.extname(req.file.originalname).replace('.', ''),
+          normalizeDataFormat(req.file.originalname),
           req.file.path,
           req.file.size,
           fileHash,
@@ -312,7 +332,7 @@ router.get('/:id/download', authenticate, auditLog('data', 'download'), async (r
     const dataId = req.params.id;
 
     const [dataList] = await pool.execute(
-      'SELECT file_path, original_filename, file_hash, submitter_id, visibility, view_permission FROM data_submissions WHERE id = ? AND deleted_at IS NULL',
+      'SELECT file_path, original_filename, file_hash, submitter_id, visibility, view_permission, review_status FROM data_submissions WHERE id = ? AND deleted_at IS NULL',
       [dataId]
     );
 
@@ -325,7 +345,7 @@ router.get('/:id/download', authenticate, auditLog('data', 'download'), async (r
     // 权限检查
     let hasPermission =
       data.submitter_id === req.user.id ||
-      data.visibility === 'public' ||
+      (data.visibility === 'public' && data.review_status === 'final_approved') ||
       req.user.role === 'admin';
 
     // 教师可以查看自己学生的数据

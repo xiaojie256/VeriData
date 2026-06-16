@@ -267,13 +267,17 @@ router.post(
 
       const review = reviews[0];
 
-      // 如果没有指定reviewer，则分配给当前专家
+      // 如果没有指定reviewer，则分配给当前专家（条件更新防并发）
       if (!review.reviewer_id) {
-        await pool.execute(
-          "UPDATE review_records SET reviewer_id = ? WHERE id = ?",
+        const [claimResult] = await pool.execute(
+          "UPDATE review_records SET reviewer_id = ? WHERE id = ? AND reviewer_id IS NULL AND status = 'pending'",
           [req.user.id, reviewId],
         );
-      } else if (review.reviewer_id !== req.user.id) {
+
+        if (claimResult.affectedRows !== 1) {
+          return res.status(409).json({ error: "该审核已被其他专家领取，请刷新列表" });
+        }
+      } else if (Number(review.reviewer_id) !== Number(req.user.id)) {
         return res.status(403).json({ error: "该审核已被其他专家领取" });
       }
 
@@ -309,9 +313,9 @@ router.post(
 
         // 创建管理员终审记录
         await pool.execute(
-          `INSERT INTO review_records (data_id, reviewer_id, review_type, status, is_blind_review)
-         VALUES (?, ?, 'admin', 'pending', 0)`,
-          [review.data_id, req.user.id], // 这里简化处理，实际应由特定管理员处理
+          `INSERT INTO review_records (data_id, review_type, status, is_blind_review)
+         VALUES (?, 'admin', 'pending', 0)`,
+          [review.data_id],
         );
       } else if (status === "rejected") {
         newStatus = "expert_rejected";

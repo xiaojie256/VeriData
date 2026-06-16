@@ -59,9 +59,15 @@ const authorize = (...roles) => {
       return res.status(403).json({ error: "没有权限执行此操作" });
     }
 
-    // 🔴 核心安全修复：强校验账号状态，非激活状态一律拦截
-    if (req.user.status !== "active" && req.user.id_verified !== 1) {
+    // 业务接口统一要求账号处于 active 状态
+    if (req.user.status !== "active") {
       return res.status(403).json({ error: "账号正在审核中，暂无权操作业务" });
+    }
+
+    // 学生、教师、专家、管理员等业务角色要求完成身份认证；普通公众用户不强制要求
+    const rolesNeedIdVerified = ["student", "teacher", "expert", "admin"];
+    if (rolesNeedIdVerified.includes(req.user.role) && req.user.id_verified !== 1) {
+      return res.status(403).json({ error: "账号身份尚未认证，暂无权操作业务" });
     }
 
     next();
