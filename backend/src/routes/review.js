@@ -67,7 +67,7 @@ router.get(
         }
       }
 
-      const [reviews] = await pool.execute(
+      const [reviews] = await pool.query(
         `SELECT
            r.id AS review_id,
            r.data_id,
@@ -91,7 +91,7 @@ router.get(
          WHERE ${where.join(" AND ")}
          ORDER BY d.submitted_at ASC, r.created_at ASC
          LIMIT ? OFFSET ?`,
-        [...params, limit, offset]
+        [...params, Number(limit), Number(offset)]
       );
 
       const [countRows] = await pool.execute(

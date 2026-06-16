@@ -126,7 +126,7 @@ router.get("/users", authenticate, authorize("admin"), async (req, res) => {
       params.push(keyword, keyword, keyword);
     }
 
-    const [users] = await pool.execute(
+    const [users] = await pool.query(
       `SELECT id, username, email, phone, real_name, avatar_url, role, status,
               email_verified, phone_verified, id_verified, quota_total, quota_used,
               created_at, last_login_at
@@ -134,7 +134,7 @@ router.get("/users", authenticate, authorize("admin"), async (req, res) => {
        ${whereClause}
        ORDER BY created_at DESC
        LIMIT ? OFFSET ?`,
-      [...params, limit, offset]
+      [...params, Number(limit), Number(offset)]
     );
 
     const [countResult] = await pool.execute(
