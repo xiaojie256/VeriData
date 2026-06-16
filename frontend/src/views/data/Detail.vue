@@ -330,18 +330,34 @@ const adminStatusText = computed(() => {
   return record ? statusMap[record.status] : '待审核'
 })
 
+const parseJsonMaybe = (value) => {
+  if (!value) return null
+
+  if (typeof value === 'object') {
+    return value
+  }
+
+  try {
+    return JSON.parse(value)
+  } catch (error) {
+    console.error('解析AI检测结果失败:', error, value)
+    return null
+  }
+}
+
 const fetchData = async () => {
   try {
     const response = await api.get(`/data/${route.params.id}`)
     data.value = response.data
-    
-    // 解析AI结果
-    if (response.data.ai_check_result) {
-      aiResult.value = {
-        score: response.data.ai_check_score,
-        details: JSON.parse(response.data.ai_check_result)
-      }
-    }
+
+    const aiDetails = parseJsonMaybe(response.data?.ai_check_result)
+
+    aiResult.value = aiDetails
+      ? {
+          score: response.data.ai_check_score,
+          details: aiDetails
+        }
+      : null
   } catch (error) {
     if (error?.error) {
       ElMessage.error(error.error)

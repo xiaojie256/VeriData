@@ -16,9 +16,14 @@
     </div>
 
     <el-card class="filter-card">
-      <el-form :model="filters" inline>
-        <el-form-item label="状态">
-          <el-select v-model="filters.status" placeholder="全部状态" clearable>
+      <el-form class="filter-form" :model="filters" inline>
+        <el-form-item label="状态" class="filter-item">
+          <el-select
+            v-model="filters.status"
+            placeholder="全部状态"
+            clearable
+            class="filter-select"
+          >
             <el-option label="草稿" value="draft" />
             <el-option label="待审核" value="submitted" />
             <el-option label="审核中" value="teacher_reviewing" />
@@ -27,8 +32,13 @@
           </el-select>
         </el-form-item>
 
-        <el-form-item label="数据类型">
-          <el-select v-model="filters.data_type" placeholder="全部类型" clearable>
+        <el-form-item label="数据类型" class="filter-item">
+          <el-select
+            v-model="filters.data_type"
+            placeholder="全部类型"
+            clearable
+            class="filter-select filter-select--type"
+          >
             <el-option label="原始数据" value="raw" />
             <el-option label="处理数据" value="processed" />
             <el-option label="分析结果" value="analysis" />
@@ -36,7 +46,7 @@
           </el-select>
         </el-form-item>
 
-        <el-form-item>
+        <el-form-item class="filter-actions">
           <el-button type="primary" @click="fetchData">筛选</el-button>
           <el-button @click="resetFilters">重置</el-button>
         </el-form-item>
@@ -417,6 +427,55 @@ onMounted(() => {
 
 .filter-card {
   margin-bottom: 16px;
+}
+
+.filter-card :deep(.el-card__body) {
+  padding: 20px 24px;
+}
+
+.filter-form {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  column-gap: 24px;
+  row-gap: 12px;
+}
+
+.filter-form :deep(.el-form-item) {
+  margin-right: 0;
+  margin-bottom: 0;
+}
+
+.filter-select {
+  width: 160px;
+}
+
+.filter-select--type {
+  width: 180px;
+}
+
+.filter-actions {
+  margin-left: 4px;
+}
+
+@media (max-width: 768px) {
+  .filter-form {
+    align-items: stretch;
+  }
+
+  .filter-form :deep(.el-form-item) {
+    width: 100%;
+  }
+
+  .filter-select,
+  .filter-select--type {
+    width: 100%;
+  }
+
+  .filter-actions :deep(.el-form-item__content) {
+    display: flex;
+    gap: 12px;
+  }
 }
 
 .pagination-container {

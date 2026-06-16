@@ -99,7 +99,19 @@ router.post('/upload', authenticate, authorize('student', 'teacher', 'admin', 'c
 
       if (existing.length > 0) throw new Error('DUPLICATE_FILE');
 
-      const { title, description, data_type = 'raw', visibility = 'private', liability_statement } = req.body;
+      const {
+        title,
+        description,
+        data_type = 'raw',
+        visibility = 'private',
+        liability_statement,
+        liability_accepted
+      } = req.body;
+
+      const liabilityAccepted =
+        liability_accepted === true ||
+        liability_accepted === 'true' ||
+        liability_accepted === '1';
 
       const [insertResult] = await connection.execute(
         `INSERT INTO data_submissions (submitter_id, title, description, data_type, data_format,
@@ -117,7 +129,7 @@ router.post('/upload', authenticate, authorize('student', 'teacher', 'admin', 'c
           req.file.originalname,
           visibility,
           liability_statement || null,
-          liability_statement ? 1 : 0
+          liabilityAccepted ? 1 : 0
         ]
       );
 
@@ -524,9 +536,26 @@ router.post(
         review_progress: 10
       });
     } catch (error) {
-      await connection.rollback();
-      logger.error('提交审核失败:', error);
-      res.status(500).json({ error: '提交审核失败' });
+      try {
+        await connection.rollback();
+      } catch (rollbackError) {
+        logger.error('提交审核回滚失败:', rollbackError);
+      }
+
+      logger.error('提交审核失败:', {
+        message: error.message,
+        code: error.code,
+        errno: error.errno,
+        sqlMessage: error.sqlMessage,
+        stack: error.stack
+      });
+
+      const clientMessage =
+        process.env.NODE_ENV === 'production'
+          ? '提交审核失败'
+          : (error.sqlMessage || error.message || '提交审核失败');
+
+      res.status(500).json({ error: clientMessage });
     } finally {
       connection.release();
     }
