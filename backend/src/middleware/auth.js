@@ -100,16 +100,28 @@ const authorize = (...roles) => {
 };
 
 // 可选认证（记录用户信息但不强制）
+// 支持两种来源：
+// 1. Authorization: Bearer xxx
+// 2. ?token=xxx，用于 window.open 下载文件场景
 const optionalAuth = async (req, res, next) => {
   try {
-    const token = req.headers.authorization?.split(" ")[1];
+    const headerToken = req.headers.authorization?.startsWith("Bearer ")
+      ? req.headers.authorization.split(" ")[1]
+      : null;
+
+    const queryToken = Array.isArray(req.query.token)
+      ? req.query.token[0]
+      : req.query.token;
+
+    const token = headerToken || queryToken;
 
     if (token) {
       const decoded = jwt.verify(token, JWT_SECRET);
+
       await assertSessionIsCurrent(decoded.userId, decoded.sessionId);
 
       const [users] = await pool.execute(
-        "SELECT id, username, role, status FROM users WHERE id = ? AND deleted_at IS NULL",
+        "SELECT id, username, email, role, real_name, avatar_url, status, id_verified, quota_total, quota_used FROM users WHERE id = ? AND deleted_at IS NULL",
         [decoded.userId],
       );
 

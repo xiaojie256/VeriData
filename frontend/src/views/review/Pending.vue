@@ -221,11 +221,13 @@ const getScoreType = (score) => {
 const fetchData = async () => {
   loading.value = true
   try {
-    const response = await api.get(`/review/pending?page=${pagination.value.page}&limit=${pagination.value.limit}`)
-    reviewList.value = response.reviews
-    pagination.value.total = response.reviews.length // 实际应返回总数
+    const response = await api.get(
+      `/review/pending?page=${pagination.value.page}&limit=${pagination.value.limit}&review_type=${reviewType.value}`,
+    )
+    reviewList.value = response.reviews || []
+    pagination.value.total = response.pagination?.total || reviewList.value.length
   } catch (error) {
-    ElMessage.error('获取待审核列表失败')
+    ElMessage.error(error?.error || '获取待审核列表失败')
   } finally {
     loading.value = false
   }
@@ -248,7 +250,7 @@ const openReviewDialog = async (row) => {
   
   // 获取AI分析结果
   try {
-    const aiResponse = await api.get(`/review/${row.review_id}/ai-analysis`)
+    const aiResponse = await api.get(`/review/${row.data_id}/ai-analysis`)
     aiAnalysis.value = aiResponse
   } catch {
     aiAnalysis.value = null
@@ -256,7 +258,7 @@ const openReviewDialog = async (row) => {
 }
 
 const viewDetail = (row) => {
-  // 查看数据详情
+  openReviewDialog(row)
 }
 
 const submitReview = async () => {

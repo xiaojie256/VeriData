@@ -9,6 +9,14 @@
         <h2 class="page-title" style="margin-top: 10px;">{{ data?.title }}</h2>
       </div>
       <div class="header-actions">
+        <el-button
+          v-if="canGoReviewCenter"
+          type="success"
+          @click="router.push('/review/pending')"
+        >
+          去审核中心
+        </el-button>
+
         <el-button type="primary" @click="downloadData">
           <el-icon><Download /></el-icon>
           下载
@@ -420,6 +428,10 @@ const currentUser = computed(() => {
 
 const currentUserRole = computed(() => currentUser.value?.role || '')
 
+const canGoReviewCenter = computed(() => {
+  return ['teacher', 'expert', 'admin'].includes(currentUser.value?.role)
+})
+
 const needsTeacherReview = computed(() => currentUserRole.value === 'student')
 
 const canTriggerAiCheck = computed(() => {
@@ -705,7 +717,13 @@ const fetchReviewRecords = async () => {
 
 const downloadData = () => {
   const token = localStorage.getItem('token')
-  window.open(`/api/data/${route.params.id}/download?token=${token}`, '_blank')
+
+  if (!token) {
+    ElMessage.warning('请先登录后再下载')
+    return
+  }
+
+  window.open(`/api/data/${route.params.id}/download?token=${encodeURIComponent(token)}`, '_blank')
 }
 
 const showSubmitDialog = async () => {
