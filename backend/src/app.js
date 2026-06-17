@@ -15,6 +15,7 @@ const userRoutes = require("./routes/users");
 const dataRoutes = require("./routes/data");
 const reviewRoutes = require("./routes/review");
 const adminRoutes = require("./routes/admin");
+const adminAiRoutes = require("./routes/adminAi");
 const aiRoutes = require("./routes/ai");
 const logger = require("./utils/logger");
 const {
