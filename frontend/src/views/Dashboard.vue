@@ -72,13 +72,13 @@
     </el-row>
     
     <!-- 审核状态流程 -->
-    <el-card class="status-card">
+    <el-card v-if="showReviewFlowCard" class="status-card">
       <template #header>
         <div class="card-header">
-          <span>审核流程状态</span>
+          <span>最近数据审核流程</span>
         </div>
       </template>
-      
+
       <el-steps :active="currentStep" align-center>
         <el-step title="数据上传" description="提交原始数据" />
         <el-step title="AI检测" description="自动质量分析" />
@@ -149,12 +149,12 @@
         </el-table-column>
         <el-table-column prop="data_type" label="类型" width="100">
           <template #default="{ row }">
-            <el-tag>{{ typeMap[row.data_type] }}</el-tag>
+            <el-tag>{{ getDataTypeLabel(row.data_type) }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="review_status" label="状态" width="120">
           <template #default="{ row }">
-            <el-tag :type="statusType[row.review_status]">{{ statusMap[row.review_status] }}</el-tag>
+            <el-tag :type="getReviewStatusType(row.review_status)">{{ getReviewStatusLabel(row.review_status) }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="ai_check_score" label="AI评分" width="100">
@@ -184,6 +184,11 @@ import { ElMessage } from 'element-plus'
 import { Upload, Search, Document, CircleCheck, Clock, Coin } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 import { api } from '../store'
+import {
+  getReviewStatusLabel,
+  getReviewStatusType,
+  getDataTypeLabel,
+} from '@/utils/reviewStatus'
 
 const store = useStore()
 const router = useRouter()
@@ -208,40 +213,28 @@ const welcomeMessage = computed(() => {
   return '晚上好，记得适当休息哦！'
 })
 
-const currentStep = ref(0)
+const reviewStepMap = {
+  draft: 0,
+  submitted: 1,
+  teacher_reviewing: 2,
+  teacher_approved: 3,
+  teacher_rejected: 2,
+  expert_reviewing: 3,
+  expert_approved: 4,
+  expert_rejected: 3,
+  final_approved: 5,
+  final_rejected: 4,
+};
 
-const statusMap = {
-  'draft': '草稿',
-  'submitted': '已提交',
-  'teacher_reviewing': '导师审核中',
-  'teacher_approved': '导师通过',
-  'teacher_rejected': '导师拒绝',
-  'expert_reviewing': '专家审核中',
-  'expert_approved': '专家通过',
-  'expert_rejected': '专家拒绝',
-  'final_approved': '最终通过',
-  'final_rejected': '最终拒绝'
-}
+const showReviewFlowCard = computed(() => {
+  const role = user.value?.role;
+  return role !== "admin" && recentData.value.length > 0;
+});
 
-const statusType = {
-  'draft': 'info',
-  'submitted': 'warning',
-  'teacher_reviewing': 'warning',
-  'teacher_approved': 'success',
-  'teacher_rejected': 'danger',
-  'expert_reviewing': 'warning',
-  'expert_approved': 'success',
-  'expert_rejected': 'danger',
-  'final_approved': 'success',
-  'final_rejected': 'danger'
-}
-
-const typeMap = {
-  'raw': '原始数据',
-  'processed': '处理数据',
-  'analysis': '分析结果',
-  'summary': '总结报告'
-}
+const currentStep = computed(() => {
+  const latestStatus = recentData.value?.[0]?.review_status;
+  return reviewStepMap[latestStatus] ?? 0;
+});
 
 const scoreColors = [
   { color: '#f56c6c', percentage: 60 },

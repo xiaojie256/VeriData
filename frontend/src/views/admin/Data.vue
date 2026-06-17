@@ -11,23 +11,22 @@
         </el-form-item>
         <el-form-item label="状态">
           <el-select v-model="filters.status" placeholder="全部状态" clearable style="width: 150px;">
-            <el-option label="草稿" value="draft" />
-            <el-option label="已提交" value="submitted" />
-            <el-option label="导师审核中" value="teacher_reviewing" />
-            <el-option label="导师通过" value="teacher_approved" />
-            <el-option label="导师拒绝" value="teacher_rejected" />
-            <el-option label="专家审核中" value="expert_reviewing" />
-            <el-option label="待终审" value="expert_approved" />
-            <el-option label="已通过" value="final_approved" />
-            <el-option label="已拒绝" value="final_rejected" />
+            <el-option
+              v-for="item in REVIEW_STATUS_OPTIONS"
+              :key="item.value"
+              :label="item.label"
+              :value="item.value"
+            />
           </el-select>
         </el-form-item>
         <el-form-item label="数据类型">
           <el-select v-model="filters.data_type" placeholder="全部类型" clearable style="width: 150px;">
-            <el-option label="原始数据" value="raw" />
-            <el-option label="处理数据" value="processed" />
-            <el-option label="分析结果" value="analysis" />
-            <el-option label="总结报告" value="summary" />
+            <el-option
+              v-for="item in DATA_TYPE_OPTIONS"
+              :key="item.value"
+              :label="item.label"
+              :value="item.value"
+            />
           </el-select>
         </el-form-item>
         <el-form-item>
@@ -43,22 +42,31 @@
         <el-table-column prop="submitter_name" label="提交者" min-width="120" />
         <el-table-column prop="data_type" label="类型" width="100">
           <template #default="{ row }">
-            <el-tag size="small">{{ typeMap[row.data_type] }}</el-tag>
+            <el-tag size="small">{{ getDataTypeLabel(row.data_type) }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="review_status" label="状态" width="120">
           <template #default="{ row }">
-            <el-tag :type="statusType[row.review_status]" size="small">
-              {{ statusMap[row.review_status] }}
+            <el-tag
+              v-if="row.review_status"
+              :type="getReviewStatusType(row.review_status)"
+              size="small"
+            >
+              {{ getReviewStatusLabel(row.review_status) }}
             </el-tag>
+            <span v-else class="empty-placeholder">-</span>
           </template>
         </el-table-column>
         <el-table-column prop="ai_check_score" label="AI评分" width="100">
           <template #default="{ row }">
-            <el-tag v-if="row.ai_check_score" :type="getScoreType(row.ai_check_score)" size="small">
-              {{ row.ai_check_score }}
+            <el-tag
+              v-if="hasAiScore(row.ai_check_score)"
+              :type="getScoreType(Number(row.ai_check_score))"
+              size="small"
+            >
+              {{ formatAiScore(row.ai_check_score) }}
             </el-tag>
-            <span v-else>-</span>
+            <span v-else class="empty-placeholder">-</span>
           </template>
         </el-table-column>
         <el-table-column prop="created_at" label="创建时间" width="180">
@@ -112,6 +120,15 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import dayjs from 'dayjs'
 import { api } from '../../store'
+import {
+  REVIEW_STATUS_OPTIONS,
+  DATA_TYPE_OPTIONS,
+  getReviewStatusLabel,
+  getReviewStatusType,
+  getDataTypeLabel,
+  hasAiScore,
+  formatAiScore,
+} from '@/utils/reviewStatus'
 
 const router = useRouter()
 const loading = ref(false)
@@ -134,31 +151,6 @@ const pagination = reactive({
   limit: 20,
   total: 0
 })
-
-const typeMap = {
-  'raw': '原始数据',
-  'processed': '处理数据',
-  'analysis': '分析结果',
-  'summary': '总结报告'
-}
-
-const statusMap = {
-  'draft': '草稿',
-  'submitted': '待审核',
-  'expert_approved': '待终审',
-  'final_approved': '已通过',
-  'final_rejected': '已拒绝'
-}
-
-const statusType = {
-  'draft': 'info',
-  'submitted': 'warning',
-  'expert_approved': 'warning',
-  'final_approved': 'success',
-  'final_rejected': 'danger'
-}
-
-const formatDate = (date) => dayjs(date).format('YYYY-MM-DD HH:mm')
 
 const getScoreType = (score) => {
   if (score >= 80) return 'success'

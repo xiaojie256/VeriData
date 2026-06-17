@@ -66,16 +66,21 @@
         <el-table-column prop="data_type" label="类型" width="100">
           <template #default="{ row }">
             <el-tag size="small">
-              {{ typeMap[row.data_type] }}
+              {{ getDataTypeLabel(row.data_type) }}
             </el-tag>
           </template>
         </el-table-column>
 
         <el-table-column prop="review_status" label="审核状态" width="140">
           <template #default="{ row }">
-            <el-tag :type="statusType[row.review_status]" size="small">
-              {{ statusMap[row.review_status] }}
+            <el-tag
+              v-if="row.review_status"
+              :type="getReviewStatusType(row.review_status)"
+              size="small"
+            >
+              {{ getReviewStatusLabel(row.review_status) }}
             </el-tag>
+            <span v-else class="empty-placeholder">-</span>
           </template>
         </el-table-column>
 
@@ -88,13 +93,13 @@
         <el-table-column prop="ai_check_score" label="AI评分" width="100">
           <template #default="{ row }">
             <el-tag
-              v-if="row.ai_check_score"
-              :type="getScoreType(row.ai_check_score)"
+              v-if="hasAiScore(row.ai_check_score)"
+              :type="getScoreType(Number(row.ai_check_score))"
               size="small"
             >
-              {{ row.ai_check_score }}
+              {{ formatAiScore(row.ai_check_score) }}
             </el-tag>
-            <span v-else>-</span>
+            <span v-else class="empty-placeholder">-</span>
           </template>
         </el-table-column>
 
@@ -191,6 +196,13 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 import { api } from '../../store'
+import {
+  getReviewStatusLabel,
+  getReviewStatusType,
+  getDataTypeLabel,
+  hasAiScore,
+  formatAiScore,
+} from '@/utils/reviewStatus'
 
 const router = useRouter()
 const route = useRoute()
@@ -220,39 +232,6 @@ const submitForm = reactive({
   teacher_id: '',
   liability_accepted: false
 })
-
-const statusMap = {
-  'draft': '草稿',
-  'submitted': '待审核',
-  'teacher_reviewing': '导师审核中',
-  'teacher_approved': '导师通过',
-  'teacher_rejected': '导师拒绝',
-  'expert_reviewing': '专家审核中',
-  'expert_approved': '专家通过',
-  'expert_rejected': '专家拒绝',
-  'final_approved': '已通过',
-  'final_rejected': '已拒绝'
-}
-
-const statusType = {
-  'draft': 'info',
-  'submitted': 'warning',
-  'teacher_reviewing': 'warning',
-  'teacher_approved': 'success',
-  'teacher_rejected': 'danger',
-  'expert_reviewing': 'warning',
-  'expert_approved': 'success',
-  'expert_rejected': 'danger',
-  'final_approved': 'success',
-  'final_rejected': 'danger'
-}
-
-const typeMap = {
-  'raw': '原始数据',
-  'processed': '处理数据',
-  'analysis': '分析结果',
-  'summary': '总结报告'
-}
 
 const formatDate = (date) => dayjs(date).format('YYYY-MM-DD HH:mm')
 
@@ -328,12 +307,10 @@ const submitReview = async (row) => {
     console.error(e)
   }
 
-  // 2. 非学生角色，直接指派给系统默认审批人
+  // 2. 非学生角色，禁止从"我的数据"走学生提交导师审核流程
   if (userRole !== 'student') {
-    submitForm.teacher_id = 1
-    teachers.value = [{ id: 1, real_name: '系统审查员（管理员）' }]
-    submitDialogVisible.value = true
-    return
+    ElMessage.warning('当前角色不支持从"我的数据"提交导师审核，请使用对应审核/管理入口');
+    return;
   }
 
   // 3. 学生角色：获取导师列表

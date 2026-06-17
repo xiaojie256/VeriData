@@ -101,6 +101,7 @@ const registerRoutes = (prefix) => {
   app.use(`${prefix}/users`, userRoutes);
   app.use(`${prefix}/data`, dataRoutes);
   app.use(`${prefix}/review`, reviewRoutes);
+  app.use(`${prefix}/admin/ai`, adminAiRoutes);
   app.use(`${prefix}/admin`, adminRoutes);
   app.use(`${prefix}/ai`, aiRoutes);
 };

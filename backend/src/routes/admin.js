@@ -48,6 +48,7 @@ router.get("/dashboard", authenticate, authorize("admin"), async (req, res) => {
         SUM(CASE WHEN review_status = 'draft' THEN 1 ELSE 0 END) as drafts,
         SUM(CASE WHEN review_status IN ('submitted', 'teacher_reviewing') THEN 1 ELSE 0 END) as teacher_pending,
         SUM(CASE WHEN review_status IN ('teacher_approved', 'expert_reviewing') THEN 1 ELSE 0 END) as expert_pending,
+        SUM(CASE WHEN review_status = 'expert_approved' THEN 1 ELSE 0 END) as final_pending,
         SUM(CASE WHEN review_status = 'final_approved' THEN 1 ELSE 0 END) as approved,
         SUM(CASE WHEN review_status IN ('teacher_rejected', 'expert_rejected', 'final_rejected') THEN 1 ELSE 0 END) as rejected
        FROM data_submissions WHERE deleted_at IS NULL`,
@@ -395,7 +396,10 @@ router.get("/data", authenticate, authorize("admin"), async (req, res) => {
     );
 
     const [countResult] = await pool.execute(
-      `SELECT COUNT(*) as total FROM data_submissions d ${whereClause}`,
+      `SELECT COUNT(*) as total
+       FROM data_submissions d
+       JOIN users u ON d.submitter_id = u.id
+       ${whereClause}`,
       params,
     );
 
@@ -424,12 +428,24 @@ router.post(
       const { decision, comments } = req.body; // decision: approved, rejected
 
       const [dataList] = await pool.execute(
-        "SELECT title, submitter_id FROM data_submissions WHERE id = ?",
+        "SELECT title, submitter_id, review_status FROM data_submissions WHERE id = ? AND deleted_at IS NULL",
         [dataId],
       );
 
       if (dataList.length === 0) {
         return res.status(404).json({ error: "数据不存在" });
+      }
+
+      if (dataList[0].review_status !== "expert_approved") {
+        return res.status(400).json({
+          error: `当前数据状态为 ${dataList[0].review_status}，只有待终审数据允许管理员终审`,
+        });
+      }
+
+      if (!["approved", "rejected"].includes(decision)) {
+        return res.status(400).json({
+          error: "无效的审核结果",
+        });
       }
 
       const newStatus =

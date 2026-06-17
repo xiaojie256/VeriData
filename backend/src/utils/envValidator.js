@@ -74,6 +74,10 @@ function validateEnv() {
       errors.push('生产环境数据库密码必须至少12个字符');
     }
 
+    if (!process.env.SETTINGS_ENCRYPTION_KEY || process.env.SETTINGS_ENCRYPTION_KEY.length < 32) {
+      errors.push('生产环境必须设置 SETTINGS_ENCRYPTION_KEY，且长度至少32字符，用于加密AI API Key');
+    }
+
     if (process.env.CORS_ORIGIN === '*') {
       errors.push('生产环境不允许 CORS 设置为 *');
     }

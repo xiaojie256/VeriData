@@ -301,6 +301,30 @@ docker-compose logs -f ai-service
    - 多重审核避免单一失误
    - AI辅助提供客观参考
 
+### AI审查配置安全说明
+
+系统不再在代码中写死外部大模型 API Base、模型名称或 API Key。
+
+管理员登录后，可在：系统管理 → AI审查配置 中统一配置：
+
+- 是否启用语义审计
+- API Base URL
+- 模型名称
+- API Key
+- Temperature
+- Max Tokens
+- 请求超时时间
+
+API Key 会由后端加密存储在数据库中，前端不会回显明文 Key。
+
+生产环境必须设置：
+
+```env
+SETTINGS_ENCRYPTION_KEY=长度至少32字符的随机字符串
+```
+
+注意：不要把真实 API Key 写入代码、README 或提交到 Git。如果 Key 已经被提交过，应立即轮换 Key。
+
 ## 贡献指南
 
 欢迎提交 Issue 和 Pull Request。

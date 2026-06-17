@@ -1,6 +1,22 @@
 import { createRouter, createWebHistory } from "vue-router";
 import store from "../store";
 
+const getHomePath = (role) => {
+  if (role === "admin") return "/admin/dashboard";
+  return "/dashboard";
+};
+
+const getLocalUserRole = () => {
+  try {
+    const userStr = localStorage.getItem("user");
+    if (!userStr) return null;
+    const user = JSON.parse(userStr);
+    return user?.role || null;
+  } catch (error) {
+    return null;
+  }
+};
+
 const routes = [
   {
     path: "/login",
@@ -17,7 +33,7 @@ const routes = [
   {
     path: "/",
     component: () => import("../views/Layout.vue"),
-    redirect: "/dashboard",
+    redirect: () => getHomePath(store.state.user?.role || getLocalUserRole()),
     children: [
       {
         path: "dashboard",
@@ -178,7 +194,7 @@ router.beforeEach((to, from, next) => {
   // 公开页面直接访问
   if (to.meta.public) {
     if (isLoggedIn && to.path === "/login") {
-      return next("/dashboard");
+      return next(getHomePath(userRole));
     }
     return next();
   }
@@ -191,7 +207,7 @@ router.beforeEach((to, from, next) => {
   // 角色权限检查
   if (to.meta.roles && userRole && !to.meta.roles.includes(userRole)) {
     console.warn(`角色权限不足: 需要 ${to.meta.roles}, 当前角色 ${userRole}`);
-    return next("/dashboard");
+    return next(getHomePath(userRole));
   }
 
   next();

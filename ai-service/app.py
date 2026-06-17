@@ -69,7 +69,7 @@ class DataAnalyzer:
     def __init__(self):
         self.anomaly_threshold = 0.7
         
-    def analyze_data(self, file_path, file_hash):
+    def analyze_data(self, file_path, file_hash, llm_config=None):
         """分析数据文件，检测异常"""
         try:
             # 读取数据文件
@@ -109,8 +109,8 @@ class DataAnalyzer:
             score = self._calculate_score(analysis_result)
             has_anomaly = score < 60 or analysis_result['anomaly_detection']['has_anomaly']
             
-            # 🔴 新增：级联小米大模型进行语义审计
-            llm_insight = self._get_llm_insight(analysis_result, score)
+            # 外部大模型语义审计：配置由后端管理员配置中心传入
+            llm_insight = self._get_llm_insight(analysis_result, score, llm_config or {})
             analysis_result['llm_insight'] = llm_insight
             
             return {
@@ -340,15 +340,24 @@ class DataAnalyzer:
         
         return max(0, round(score, 1))
     
-    def _get_llm_insight(self, analysis, score):
-        """通过大模型获取语义审计意见"""
+    def _get_llm_insight(self, analysis, score, llm_config=None):
+        """通过管理员配置的大模型获取语义审计意见"""
         try:
-            api_base = os.environ.get('MIMO_API_BASE', 'https://api.xiaomimimo.com/v1')
-            api_key = os.environ.get('MIMO_API_KEY')
-            model = os.environ.get('MIMO_MODEL', 'mimo-v2.5-flash')
-            
-            if not api_key:
-                return "大模型密钥未配置，无法获取审计报告。"
+            llm_config = llm_config or {}
+
+            if not llm_config.get('enabled'):
+                reason = llm_config.get('disabled_reason') or '大模型语义审计未启用。'
+                return reason
+
+            api_base = str(llm_config.get('base_url') or '').strip().rstrip('/')
+            api_key = str(llm_config.get('api_key') or '').strip()
+            model = str(llm_config.get('model') or '').strip()
+            temperature = float(llm_config.get('temperature', 0.3))
+            max_tokens = int(llm_config.get('max_tokens', 500))
+            timeout_ms = int(llm_config.get('timeout_ms', 30000))
+
+            if not api_base or not api_key or not model:
+                return "大模型配置不完整，无法获取语义审计报告。"
             
             # 构建大模型提示词
             anomaly_summary = "检测到的异常：" if analysis['anomaly_detection']['anomalies'] else "未发现明显异常"
@@ -392,10 +401,10 @@ class DataAnalyzer:
                         {"role": "system", "content": "你是专业的数据质量审计专家，具有丰富的数据治理经验。"},
                         {"role": "user", "content": prompt}
                     ],
-                    "temperature": 0.3,
-                    "max_tokens": 500
+                    "temperature": temperature,
+                    "max_tokens": max_tokens
                 },
-                timeout=30
+                timeout=max(1, timeout_ms / 1000)
             )
             
             if response.status_code == 200:
@@ -476,12 +485,13 @@ def analyze():
         data = request.json
         file_path = data.get('file_path')
         file_hash = data.get('file_hash')
-        
+        llm_config = data.get('llm_config') or {}
+
         if not file_path or not os.path.exists(file_path):
             return jsonify({'error': '文件不存在'}), 400
-        
+
         logger.info(f"开始分析文件: {file_path}")
-        result = analyzer.analyze_data(file_path, file_hash)
+        result = analyzer.analyze_data(file_path, file_hash, llm_config)
         result = make_json_safe(result)
 
         if result.get('details', {}).get('error'):

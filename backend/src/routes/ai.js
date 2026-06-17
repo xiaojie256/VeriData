@@ -51,11 +51,20 @@ router.post('/analyze/:dataId', authenticate, async (req, res) => {
     );
 
     // 异步调用AI服务
-    axios.post(`${AI_SERVICE_URL}/analyze`, {
-      data_id: dataId,
-      file_path: data.file_path,
-      file_hash: data.file_hash
-    }).then(async (response) => {
+    const llmConfig = await getRuntimeAiReviewConfig();
+
+    axios.post(
+      `${AI_SERVICE_URL}/analyze`,
+      {
+        data_id: dataId,
+        file_path: data.file_path,
+        file_hash: data.file_hash,
+        llm_config: llmConfig,
+      },
+      {
+        timeout: 120000,
+      },
+    ).then(async (response) => {
       const result = response.data;
       
       await pool.execute(

@@ -138,6 +138,14 @@ const statsCards = computed(() => [
     route: '/review/pending'
   },
   {
+    key: 'final_pending',
+    label: '待终审',
+    value: stats.value.data_stats?.final_pending || 0,
+    icon: 'Warning',
+    color: '#F56C6C',
+    route: '/admin/data'
+  },
+  {
     key: 'approved',
     label: '已通过',
     value: stats.value.data_stats?.approved || 0,
