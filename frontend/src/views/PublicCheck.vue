@@ -78,9 +78,9 @@
                   {{ riskLabel }}
                 </el-tag>
               </el-descriptions-item>
-              <el-descriptions-item label="是否有效">
+              <el-descriptions-item label="解析状态">
                 <el-tag :type="result.is_valid ? 'success' : 'danger'">
-                  {{ result.is_valid ? '有效' : '无效' }}
+                  {{ result.is_valid ? '解析成功' : '解析失败' }}
                 </el-tag>
               </el-descriptions-item>
             </el-descriptions>

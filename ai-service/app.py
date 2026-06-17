@@ -596,9 +596,23 @@ class DataAnalyzer:
             except Exception as e:
                 return {'df': None, 'format': 'json', 'message': f'JSON 解析失败: {str(e)}'}
 
-        # CSV / TSV
+        # CSV / TSV / 普通文本
+        lines = [line.strip() for line in content.splitlines() if line.strip()]
+        if not lines:
+            return {'df': None, 'format': 'unknown', 'message': '数据内容为空'}
+
+        separator = '\t' if '\t' in lines[0] else ','
+
+        # 如果明显不是分隔型数据，不要交给 read_csv 硬读成一列表格
+        if not self._looks_like_delimited_data(lines, separator):
+            return {'df': pd.DataFrame({'text': lines}), 'format': 'text'}
+
+        # 明显像 CSV/TSV，则解析失败时应判为格式错误，不应降级成 TEXT
+        delimiter_issue = self._detect_delimited_format_issue(lines, separator)
+        if delimiter_issue:
+            return {'df': None, 'format': 'tsv' if separator == '\t' else 'csv', 'message': delimiter_issue}
+
         try:
-            separator = '\t' if '\t' in content.splitlines()[0] else ','
             df = pd.read_csv(
                 StringIO(content),
                 sep=separator,
@@ -607,11 +621,52 @@ class DataAnalyzer:
             )
             return {'df': df, 'format': 'tsv' if separator == '\t' else 'csv'}
         except Exception as csv_error:
-            # 普通文本：不强行判失败，但后续只做文本风险识别
-            lines = [line.strip() for line in content.splitlines() if line.strip()]
-            if len(lines) >= 1:
-                return {'df': pd.DataFrame({'text': lines}), 'format': 'text'}
-            return {'df': None, 'format': 'unknown', 'message': f'解析失败: {str(csv_error)}'}
+            return {
+                'df': None,
+                'format': 'tsv' if separator == '\t' else 'csv',
+                'message': f'CSV/TSV 解析失败: {str(csv_error)}'
+            }
+
+    def _looks_like_delimited_data(self, lines, separator):
+        """判断内容是否明显像 CSV/TSV，避免普通文本被 pandas 误读为一列表格"""
+        if not lines:
+            return False
+
+        if separator not in lines[0]:
+            return False
+
+        sample_lines = lines[: min(len(lines), 10)]
+        delimiter_lines = [line for line in sample_lines if separator in line]
+
+        return len(delimiter_lines) >= max(2, len(sample_lines) // 2)
+
+    def _detect_delimited_format_issue(self, lines, separator):
+        """检测 CSV/TSV 是否存在列数不一致"""
+        import csv
+        from io import StringIO
+
+        try:
+            reader = csv.reader(StringIO('\n'.join(lines)), delimiter=separator)
+            rows = list(reader)
+        except Exception as e:
+            return f'CSV/TSV 格式错误: {str(e)}'
+
+        if len(rows) < 2:
+            return '数据行数不足，至少需要表头和一行数据'
+
+        expected_columns = len(rows[0])
+        if expected_columns <= 1:
+            return None
+
+        bad_rows = []
+        for index, row in enumerate(rows[1:], start=2):
+            if len(row) != expected_columns:
+                bad_rows.append(f'第 {index} 行列数为 {len(row)}，应为 {expected_columns}')
+
+        if bad_rows:
+            return 'CSV/TSV 列数不一致：' + '；'.join(bad_rows[:5])
+
+        return None
 
     def _check_public_quality_issues(self, df):
         issues = []
@@ -828,9 +883,26 @@ class DataAnalyzer:
         issues = []
 
         compliance_rules = [
-            (r'(伪造|编造|代填|随便填|批量生成|模拟生成)', '文本包含疑似伪造、代填或批量生成数据表述'),
-            (r'(不要记录来源|隐藏真实来源|来源保密|无法提供来源|来源不明)', '文本包含来源不明或规避来源记录的风险表述'),
-            (r'(绕过审核|规避审核|无条件通过|直接通过|跳过审核)', '文本包含审核规避或干扰审核流程的风险表述')
+            (
+                r'(伪造|编造|虚构|模拟生成|批量生成|代填|随便填)',
+                '文本包含疑似伪造、代填或批量生成数据表述'
+            ),
+            (
+                r'(不要|不要求|无需|避免|隐藏|不记录).{0,15}(来源|出处|授权|真实来源|数据来源)',
+                '文本包含来源不明、未授权或规避来源记录的风险表述'
+            ),
+            (
+                r'(来源不明|无法提供来源|未提供授权|未取得授权|没有授权)',
+                '文本包含来源不明或授权不足风险'
+            ),
+            (
+                r'(绕过|规避|跳过|逃避).{0,15}(审核|审查|检测|风控|平台审核)',
+                '文本包含审核规避或干扰审核流程的风险表述'
+            ),
+            (
+                r'(无条件|直接|自动|强制).{0,15}(通过|放行|合格)',
+                '文本包含诱导系统直接通过审核的风险表述'
+            )
         ]
 
         for pattern, message in compliance_rules:

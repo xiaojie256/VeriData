@@ -69,58 +69,223 @@
           </template>
           
           <div v-if="aiResult">
-            <div class="ai-score-section">
-              <h4>综合评分</h4>
-              <el-progress 
-                :percentage="aiResult.score" 
-                :color="scoreColors"
-                :stroke-width="20"
-                style="width: 300px;"
-              />
-              <span :class="['score-text', getScoreClass(aiResult.score)]">{{ aiResult.score }}分</span>
-            </div>
-            
-            <el-divider />
-            
-            <!-- 数据质量 -->
-            <div v-if="aiResult.details?.data_quality" class="ai-section">
-              <h4>数据质量分析</h4>
-              <el-descriptions :column="1" border>
-                <el-descriptions-item label="数据行数">{{ aiResult.details.file_info?.rows }}</el-descriptions-item>
-                <el-descriptions-item label="数据列数">{{ aiResult.details.file_info?.columns }}</el-descriptions-item>
-                <el-descriptions-item label="重复行">{{ aiResult.details.data_quality?.duplicate_rows }}</el-descriptions-item>
-              </el-descriptions>
-              
-              <div v-if="aiResult.details.data_quality?.missing_values" class="missing-values">
-                <h5>缺失值统计</h5>
-                <el-tag 
-                  v-for="(info, col) in aiResult.details.data_quality.missing_values" 
-                  :key="col"
-                  :type="info.percentage > 20 ? 'danger' : info.percentage > 5 ? 'warning' : 'success'"
-                  class="value-tag"
-                >
-                  {{ col }}: {{ info.percentage }}%
-                </el-tag>
+            <el-alert
+              v-if="aiResult.skipped"
+              :title="aiResult.reason || '当前文件类型暂不支持自动 AI 检测，已跳过'"
+              type="info"
+              show-icon
+              :closable="false"
+            />
+
+            <template v-else>
+              <div class="ai-score-section">
+                <h4>综合评分</h4>
+                <el-progress
+                  :percentage="aiResult.score"
+                  :color="scoreColors"
+                  :stroke-width="20"
+                  style="width: 300px;"
+                />
+                <span :class="['score-text', getScoreClass(aiResult.score)]">
+                  {{ aiResult.score }}分
+                </span>
               </div>
-            </div>
-            
-            <!-- 异常检测 -->
-            <div v-if="aiResult.details?.anomaly_detection?.anomalies?.length" class="ai-section">
-              <h4>异常检测结果</h4>
-              <el-alert
-                v-for="(anomaly, index) in aiResult.details.anomaly_detection.anomalies"
-                :key="index"
-                :title="anomaly.type"
-                :description="anomaly.description"
-                type="warning"
-                show-icon
-                :closable="false"
-                style="margin-bottom: 10px;"
-              />
-            </div>
+
+              <el-descriptions :column="2" border class="ai-summary">
+                <el-descriptions-item label="数据行数">
+                  {{ aiResult.details?.file_info?.rows ?? '-' }}
+                </el-descriptions-item>
+                <el-descriptions-item label="数据列数">
+                  {{ aiResult.details?.file_info?.columns ?? '-' }}
+                </el-descriptions-item>
+                <el-descriptions-item label="重复行">
+                  {{ aiResult.details?.data_quality?.duplicate_rows ?? 0 }}
+                </el-descriptions-item>
+                <el-descriptions-item label="异常数量">
+                  {{ aiResult.details?.anomaly_detection?.anomaly_count ?? anomalyItems.length }}
+                </el-descriptions-item>
+                <el-descriptions-item label="一致性问题">
+                  {{ consistencyIssues.length }}
+                </el-descriptions-item>
+                <el-descriptions-item label="风险等级">
+                  {{ aiResult.riskLevel || '未标记' }}
+                </el-descriptions-item>
+              </el-descriptions>
+
+              <el-divider />
+
+              <el-tabs type="border-card" class="ai-detail-tabs">
+                <el-tab-pane label="质量问题">
+                  <h5>缺失值统计</h5>
+                  <el-table
+                    v-if="missingValueRows.length"
+                    :data="missingValueRows"
+                    border
+                    size="small"
+                  >
+                    <el-table-column prop="column" label="字段" min-width="160" />
+                    <el-table-column prop="count" label="缺失数量" width="110" />
+                    <el-table-column label="缺失比例" width="120">
+                      <template #default="{ row }">
+                        <el-tag
+                          :type="Number(row.percentage) > 20 ? 'danger' : Number(row.percentage) > 5 ? 'warning' : 'success'"
+                          size="small"
+                        >
+                          {{ row.percentage }}%
+                        </el-tag>
+                      </template>
+                    </el-table-column>
+                  </el-table>
+                  <el-alert
+                    v-else
+                    title="未发现缺失值问题"
+                    type="success"
+                    :closable="false"
+                    show-icon
+                  />
+
+                  <el-divider />
+
+                  <h5>字段类型</h5>
+                  <el-table
+                    v-if="dataTypeRows.length"
+                    :data="dataTypeRows"
+                    border
+                    size="small"
+                  >
+                    <el-table-column prop="column" label="字段" min-width="160" />
+                    <el-table-column prop="type" label="识别类型" min-width="120" />
+                  </el-table>
+                  <el-empty v-else description="暂无字段类型信息" />
+                </el-tab-pane>
+
+                <el-tab-pane label="异常检测">
+                  <el-alert
+                    v-for="(anomaly, index) in anomalyItems"
+                    :key="index"
+                    :title="anomaly.description || anomaly.type || '异常项'"
+                    :description="anomaly.column ? `字段：${anomaly.column}` : ''"
+                    type="warning"
+                    show-icon
+                    :closable="false"
+                    class="ai-alert-item"
+                  />
+
+                  <el-empty v-if="!anomalyItems.length" description="未发现明显异常" />
+                </el-tab-pane>
+
+                <el-tab-pane label="统计分析">
+                  <el-table
+                    v-if="statisticRows.length"
+                    :data="statisticRows"
+                    border
+                    size="small"
+                  >
+                    <el-table-column prop="column" label="数值字段" min-width="140" />
+                    <el-table-column prop="mean" label="均值" width="100" />
+                    <el-table-column prop="std" label="标准差" width="100" />
+                    <el-table-column prop="min" label="最小值" width="100" />
+                    <el-table-column prop="median" label="中位数" width="100" />
+                    <el-table-column prop="max" label="最大值" width="100" />
+                    <el-table-column prop="outliers" label="离群点" width="100" />
+                  </el-table>
+
+                  <el-empty v-else description="暂无数值字段统计分析" />
+                </el-tab-pane>
+
+                <el-tab-pane label="一致性与审计建议">
+                  <h5>一致性问题</h5>
+                  <el-alert
+                    v-for="(issue, index) in consistencyIssues"
+                    :key="index"
+                    :title="issue.description || issue.issue || '一致性问题'"
+                    :description="issue.column ? `字段：${issue.column}` : ''"
+                    type="warning"
+                    show-icon
+                    :closable="false"
+                    class="ai-alert-item"
+                  />
+                  <el-alert
+                    v-if="!consistencyIssues.length"
+                    title="未发现一致性问题"
+                    type="success"
+                    :closable="false"
+                    show-icon
+                  />
+
+                  <el-divider />
+
+                  <h5>语义审计 / 后续审核重点</h5>
+                  <el-card
+                    v-if="aiResult.llmInsight"
+                    shadow="never"
+                    class="ai-insight-card"
+                  >
+                    <div class="ai-insight-text">{{ aiResult.llmInsight }}</div>
+                  </el-card>
+                  <el-empty
+                    v-else
+                    description="暂无语义审计建议；可能未启用大模型配置，或本次只执行了本地基础检测"
+                  />
+
+                  <template v-if="aiResult.suggestions.length">
+                    <el-divider />
+                    <h5>系统建议</h5>
+                    <el-alert
+                      v-for="(suggestion, index) in aiResult.suggestions"
+                      :key="index"
+                      :title="suggestion"
+                      type="info"
+                      show-icon
+                      :closable="false"
+                      class="ai-alert-item"
+                    />
+                  </template>
+                </el-tab-pane>
+
+                <el-tab-pane label="原始结果">
+                  <pre class="ai-raw-json">{{ JSON.stringify(aiResult.raw, null, 2) }}</pre>
+                </el-tab-pane>
+              </el-tabs>
+            </template>
           </div>
-          
-          <el-empty v-else description="AI检测尚未完成" />
+
+          <template v-else-if="data?.ai_check_status === 'failed'">
+            <el-alert
+              type="error"
+              show-icon
+              :closable="false"
+              title="AI检测失败"
+              style="margin-bottom: 16px;"
+            >
+              <template #default>
+                {{ aiFailureReason || 'AI检测失败，请检查文件格式或查看后端日志。' }}
+              </template>
+            </el-alert>
+
+            <el-button
+              v-if="canTriggerAiCheck"
+              type="primary"
+              :loading="aiRetryLoading"
+              @click="triggerAiAnalysis"
+            >
+              重新检测
+            </el-button>
+          </template>
+
+          <template v-else-if="data?.ai_check_status === 'running'">
+            <el-alert
+              type="info"
+              show-icon
+              :closable="false"
+              title="AI检测进行中"
+            />
+          </template>
+
+          <el-empty
+            v-else
+            description="AI检测尚未完成或当前文件类型不支持 AI 检测"
+          />
         </el-card>
         
         <!-- 审核记录 -->
@@ -394,19 +559,107 @@ const parseJsonMaybe = (value) => {
   }
 }
 
+const clampScore = (value) => {
+  const score = Number(value)
+  if (!Number.isFinite(score)) return 0
+  return Math.min(100, Math.max(0, score))
+}
+
+const normalizeAiResult = (rawResult, scoreFromTable) => {
+  if (!rawResult) return null
+
+  const details = rawResult.details && typeof rawResult.details === 'object'
+    ? rawResult.details
+    : rawResult
+
+  const score = rawResult.score ?? scoreFromTable ?? details.score ?? 0
+
+  return {
+    score: clampScore(score),
+    raw: rawResult,
+    details,
+    skipped: Boolean(rawResult.skipped || details.skipped),
+    reason: rawResult.reason || details.reason || '',
+    summary: rawResult.summary || details.summary || '',
+    riskLevel: rawResult.risk_level || details.risk_level || '',
+    suggestions: Array.isArray(rawResult.suggestions)
+      ? rawResult.suggestions
+      : Array.isArray(details.suggestions)
+        ? details.suggestions
+        : [],
+    hasAnomaly: Boolean(
+      rawResult.has_anomaly ??
+      rawResult.anomaly_detected ??
+      details.anomaly_detection?.has_anomaly
+    ),
+    llmInsight: rawResult.llm_insight || details.llm_insight || ''
+  }
+}
+
+const missingValueRows = computed(() => {
+  const missingValues = aiResult.value?.details?.data_quality?.missing_values || {}
+
+  return Object.entries(missingValues)
+    .map(([column, info]) => ({
+      column,
+      count: info?.count ?? 0,
+      percentage: info?.percentage ?? 0
+    }))
+    .filter(row => Number(row.count) > 0 || Number(row.percentage) > 0)
+    .sort((a, b) => Number(b.percentage) - Number(a.percentage))
+})
+
+const dataTypeRows = computed(() => {
+  const dataTypes = aiResult.value?.details?.data_quality?.data_types || {}
+
+  return Object.entries(dataTypes).map(([column, type]) => ({
+    column,
+    type
+  }))
+})
+
+const statisticRows = computed(() => {
+  const statistics = aiResult.value?.details?.statistical_analysis || {}
+
+  return Object.entries(statistics).map(([column, stats]) => ({
+    column,
+    mean: stats?.mean ?? '-',
+    std: stats?.std ?? '-',
+    min: stats?.min ?? '-',
+    median: stats?.median ?? '-',
+    max: stats?.max ?? '-',
+    outliers: stats?.outliers ?? 0
+  }))
+})
+
+const anomalyItems = computed(() => {
+  return aiResult.value?.details?.anomaly_detection?.anomalies || []
+})
+
+const consistencyIssues = computed(() => {
+  return aiResult.value?.details?.consistency_check?.issues || []
+})
+
+const aiFailureReason = computed(() => {
+  const result = data.value?.ai_check_result
+
+  if (!result) return ''
+
+  try {
+    const parsed = typeof result === 'string' ? JSON.parse(result) : result
+    return parsed.error || parsed.details?.error || parsed.reason || ''
+  } catch (error) {
+    return String(result)
+  }
+})
+
 const fetchData = async () => {
   try {
     const response = await api.get(`/data/${route.params.id}`)
     data.value = response.data
 
     const aiDetails = parseJsonMaybe(response.data?.ai_check_result)
-
-    aiResult.value = aiDetails
-      ? {
-          score: response.data.ai_check_score,
-          details: aiDetails
-        }
-      : null
+    aiResult.value = normalizeAiResult(aiDetails, response.data?.ai_check_score)
   } catch (error) {
     if (error?.error) {
       ElMessage.error(error.error)
@@ -456,6 +709,12 @@ const downloadData = () => {
 }
 
 const showSubmitDialog = async () => {
+  // 检查 AI 检测状态，学生角色必须通过 AI 检测才能提交
+  if (data.value && currentUserRole.value === 'student' && data.value.ai_check_status !== 'completed') {
+    ElMessage.warning('AI检测未通过或尚未完成，暂不能提交审核。请先完成AI检测。')
+    return
+  }
+
   submitDialogVisible.value = true
   teacher.value = null
 
@@ -583,5 +842,40 @@ onMounted(() => {
 
 .review-steps {
   min-height: 400px;
+}
+
+.ai-summary {
+  margin-top: 16px;
+}
+
+.ai-detail-tabs {
+  margin-top: 16px;
+}
+
+.ai-alert-item {
+  margin-bottom: 10px;
+}
+
+.ai-insight-card {
+  background: #f8fafc;
+}
+
+.ai-insight-text {
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.ai-raw-json {
+  max-height: 360px;
+  overflow: auto;
+  padding: 12px;
+  border-radius: 4px;
+  background: #f5f7fa;
+  color: #303133;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 </style>

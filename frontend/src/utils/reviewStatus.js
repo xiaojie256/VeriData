@@ -15,6 +15,7 @@ export const DATA_TYPE_OPTIONS = [
   { label: "原始数据", value: "raw" },
   { label: "处理后数据", value: "processed" },
   { label: "分析结果", value: "analysis" },
+  { label: "总结报告", value: "summary" },
 ];
 
 export const reviewStatusMap = Object.fromEntries(

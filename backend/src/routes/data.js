@@ -12,6 +12,40 @@ const { withTransaction } = require('../utils/transaction');
 const router = express.Router();
 const UPLOAD_PATH = process.env.UPLOAD_PATH || './uploads';
 
+// CSV 格式预检函数
+const validateCsvFile = (filePath) => {
+  const content = fs.readFileSync(filePath, 'utf8')
+  const lines = content.split(/\r?\n/).filter(line => line.trim() !== '')
+
+  if (lines.length < 2) {
+    return { valid: false, reason: 'CSV至少需要包含表头和一行数据' }
+  }
+
+  let quoteCount = 0
+  for (const char of content) {
+    if (char === '"') quoteCount++
+  }
+
+  if (quoteCount % 2 !== 0) {
+    return { valid: false, reason: 'CSV存在未闭合的双引号，请检查字段内容' }
+  }
+
+  const headerColumns = lines[0].split(',').length
+
+  for (let i = 1; i < lines.length; i++) {
+    const currentColumns = lines[i].split(',').length
+
+    if (currentColumns !== headerColumns) {
+      return {
+        valid: false,
+        reason: `CSV第 ${i + 1} 行列数为 ${currentColumns}，与表头列数 ${headerColumns} 不一致`
+      }
+    }
+  }
+
+  return { valid: true }
+}
+
 // 计算文件哈希
 const calculateFileHash = (filePath) => {
   const fileBuffer = fs.readFileSync(filePath);
@@ -29,6 +63,10 @@ const normalizeDataFormat = (filename) => {
     ".json": "json",
     ".txt": "txt",
     ".pdf": "pdf",
+    ".doc": "word",
+    ".docx": "word",
+    ".zip": "archive",
+    ".rar": "archive",
     ".jpg": "image",
     ".jpeg": "image",
     ".png": "image",
@@ -178,6 +216,15 @@ router.post('/upload', authenticate, authorize('student', 'teacher', 'admin', 'c
 
       const fileHash = calculateFileHash(req.file.path);
 
+      // CSV 格式预检：拦截明显格式错误的 CSV 文件
+      const ext = path.extname(req.file.originalname).toLowerCase()
+      if (ext === '.csv') {
+        const csvValidation = validateCsvFile(req.file.path)
+        if (!csvValidation.valid) {
+          throw new Error(`CSV_VALIDATION_FAILED:${csvValidation.reason}`)
+        }
+      }
+
       const [existing] = await connection.execute(
         'SELECT id FROM data_submissions WHERE file_hash = ? AND submitter_id = ? AND deleted_at IS NULL',
         [fileHash, req.user.id]
@@ -276,7 +323,11 @@ router.post('/upload', authenticate, authorize('student', 'teacher', 'admin', 'c
       return res.status(403).json({ error: '配额已用完' });
     }
     if (error.message === 'DUPLICATE_FILE') {
-      return res.status(409).json({ error: '该文件已上传过' });
+      return res.status(409).json({
+        error: '相同内容的文件已上传过，即使文件名不同也会被识别为重复',
+        code: 'DUPLICATE_FILE',
+        duplicate_by: 'file_hash'
+      });
     }
     if (error.message === 'INVALID_VISIBILITY') {
       return res.status(400).json({ error: '无效的可见性设置' });
@@ -286,6 +337,9 @@ router.post('/upload', authenticate, authorize('student', 'teacher', 'admin', 'c
     }
     if (error.message === 'INVALID_VIEW_PERMISSION') {
       return res.status(400).json({ error: '指定可见人员不存在或不可用' });
+    }
+    if (error.message.startsWith('CSV_VALIDATION_FAILED:')) {
+      return res.status(400).json({ error: error.message.replace('CSV_VALIDATION_FAILED:', '') });
     }
     logger.error('数据上传失败:', error);
     res.status(500).json({ error: '上传失败' });
@@ -310,9 +364,9 @@ router.get('/student/:studentId', authenticate, authorize('teacher', 'admin'), a
       }
     }
 
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
-    const { status } = req.query;
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 10, 1), 50);
+    const { status, data_type } = req.query;
     const offset = (page - 1) * limit;
 
     let query = `SELECT id, title, description, data_type, data_format, file_size,
@@ -328,6 +382,11 @@ router.get('/student/:studentId', authenticate, authorize('teacher', 'admin'), a
       params.push(status);
     }
 
+    if (data_type) {
+      query += ' AND data_type = ?';
+      params.push(data_type);
+    }
+
     query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
     params.push(limit, offset);
 
@@ -338,6 +397,10 @@ router.get('/student/:studentId', authenticate, authorize('teacher', 'admin'), a
     if (status) {
       countQuery += ' AND review_status = ?';
       countParams.push(status);
+    }
+    if (data_type) {
+      countQuery += ' AND data_type = ?';
+      countParams.push(data_type);
     }
     const [countResult] = await pool.execute(countQuery, countParams);
 
@@ -363,9 +426,9 @@ router.get('/my', authenticate, async (req, res) => {
       return res.status(401).json({ error: '用户未认证' });
     }
 
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
-    const { status } = req.query;
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 10, 1), 50);
+    const { status, data_type } = req.query;
     const offset = (page - 1) * limit;
 
     const userId = req.user.id;
@@ -383,17 +446,26 @@ router.get('/my', authenticate, async (req, res) => {
       params.push(status);
     }
 
+    if (data_type) {
+      query += ' AND data_type = ?';
+      params.push(data_type);
+    }
+
     query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
     params.push(limit, offset);
 
     const [data] = await pool.query(query, params);
 
-    // 修正：总数统计必须动态复用相同的过滤条件，防止分页总数失真
+    // 总数统计必须复用同样的筛选条件
     let countQuery = 'SELECT COUNT(*) as total FROM data_submissions WHERE submitter_id = ? AND deleted_at IS NULL';
     let countParams = [userId];
     if (status) {
       countQuery += ' AND review_status = ?';
       countParams.push(status);
+    }
+    if (data_type) {
+      countQuery += ' AND data_type = ?';
+      countParams.push(data_type);
     }
     const [countResult] = await pool.execute(countQuery, countParams);
 
@@ -572,7 +644,7 @@ router.post(
       await connection.beginTransaction();
 
       const [dataList] = await connection.execute(
-        `SELECT id, submitter_id, title, review_status
+        `SELECT id, submitter_id, title, review_status, ai_check_status
          FROM data_submissions
          WHERE id = ? AND deleted_at IS NULL
          FOR UPDATE`,
@@ -589,6 +661,14 @@ router.post(
       if (data.submitter_id !== req.user.id) {
         await connection.rollback();
         return res.status(403).json({ error: '无权操作此数据' });
+      }
+
+      // 检查 AI 检测状态，学生角色必须通过 AI 检测才能提交审核
+      if (req.user.role === 'student' && data.ai_check_status !== 'completed') {
+        await connection.rollback();
+        return res.status(400).json({
+          error: 'AI检测未完成或检测失败，暂不能提交审核'
+        });
       }
 
       const allowedStatuses = ['draft', 'teacher_rejected', 'expert_rejected', 'final_rejected'];

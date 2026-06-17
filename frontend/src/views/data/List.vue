@@ -24,11 +24,12 @@
             clearable
             class="filter-select"
           >
-            <el-option label="草稿" value="draft" />
-            <el-option label="待审核" value="submitted" />
-            <el-option label="审核中" value="teacher_reviewing" />
-            <el-option label="已通过" value="final_approved" />
-            <el-option label="已拒绝" value="final_rejected" />
+            <el-option
+              v-for="option in REVIEW_STATUS_OPTIONS"
+              :key="option.value"
+              :label="option.label"
+              :value="option.value"
+            />
           </el-select>
         </el-form-item>
 
@@ -39,15 +40,17 @@
             clearable
             class="filter-select filter-select--type"
           >
-            <el-option label="原始数据" value="raw" />
-            <el-option label="处理数据" value="processed" />
-            <el-option label="分析结果" value="analysis" />
-            <el-option label="总结报告" value="summary" />
+            <el-option
+              v-for="option in DATA_TYPE_OPTIONS"
+              :key="option.value"
+              :label="option.label"
+              :value="option.value"
+            />
           </el-select>
         </el-form-item>
 
         <el-form-item class="filter-actions">
-          <el-button type="primary" @click="fetchData">筛选</el-button>
+          <el-button type="primary" @click="applyFilters">筛选</el-button>
           <el-button @click="resetFilters">重置</el-button>
         </el-form-item>
       </el-form>
@@ -121,10 +124,18 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="200" fixed="right">
+        <el-table-column label="操作" width="260" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="viewDetail(row.id)">
               查看
+            </el-button>
+            <el-button
+              v-if="row.ai_check_status === 'completed'"
+              link
+              type="warning"
+              @click="viewDetail(row.id)"
+            >
+              AI详情
             </el-button>
 
             <el-button
@@ -197,6 +208,8 @@ import { Plus } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 import { api } from '../../store'
 import {
+  REVIEW_STATUS_OPTIONS,
+  DATA_TYPE_OPTIONS,
   getReviewStatusLabel,
   getReviewStatusType,
   getDataTypeLabel,
@@ -286,14 +299,21 @@ const fetchData = async () => {
   }
 }
 
+const applyFilters = () => {
+  pagination.page = 1
+  fetchData()
+}
+
 const resetFilters = () => {
   filters.status = ''
   filters.data_type = ''
+  pagination.page = 1
   fetchData()
 }
 
 const handleSizeChange = (size) => {
   pagination.limit = size
+  pagination.page = 1
   fetchData()
 }
 

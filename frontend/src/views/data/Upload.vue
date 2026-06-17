@@ -105,16 +105,20 @@
                 :auto-upload="false"
                 :on-change="handleFileChange"
                 :on-remove="handleFileRemove"
+                :on-exceed="handleFileExceed"
                 :limit="1"
-                accept=".csv,.xlsx,.xls,.json,.txt,.pdf,.zip"
+                accept=".csv,.xlsx,.xls,.json,.txt,.pdf,.doc,.docx,.zip,.rar"
               >
                 <el-icon class="el-icon--upload"><upload-filled /></el-icon>
                 <div class="el-upload__text">
                   拖拽文件到此处或 <em>点击上传</em>
                 </div>
                 <template #tip>
-                  <div class="el-upload__tip">
-                    当前每次仅支持上传 1 个文件；支持格式: CSV, Excel, JSON, TXT, PDF, ZIP | 最大100MB
+                  <div class="el-upload__tip upload-format-tip">
+                    <div>当前每次仅支持上传 1 个文件</div>
+                    <div>支持上传：CSV、Excel、JSON、TXT、PDF、Word、ZIP/RAR，最大 100MB</div>
+                    <div>当前支持 AI 自动检测：CSV、Excel、JSON、制表符分隔 TXT</div>
+                    <div>PDF、Word、ZIP/RAR 等文件可上传归档，但暂不参与自动 AI 检测</div>
                   </div>
                 </template>
               </el-upload>
@@ -172,7 +176,7 @@
 import { ref, reactive, computed, watch } from 'vue'
 import { useStore } from 'vuex'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, genFileId } from 'element-plus'
 import { UploadFilled, Warning } from '@element-plus/icons-vue'
 import { api } from '../../store'
 
@@ -279,11 +283,32 @@ watch(
 )
 
 const handleFileChange = (file) => {
-  selectedFile.value = file.raw
+  const rawFile = file.raw || file
+  selectedFile.value = rawFile
+  form.file = rawFile
 }
 
 const handleFileRemove = () => {
   selectedFile.value = null
+  form.file = null
+}
+
+const handleFileExceed = (files) => {
+  const file = files?.[0]
+  if (!file) return
+
+  // 单文件上传场景：重新选择文件时自动清空旧文件并加入新文件
+  uploadRef.value?.clearFiles()
+
+  // Element Plus 内部文件列表依赖 uid，替换时给新文件生成新的 uid
+  file.uid = genFileId()
+  uploadRef.value?.handleStart(file)
+
+  // 同步业务提交用的真实 File 对象，避免只更新 UI、不更新 FormData
+  selectedFile.value = file
+  form.file = file
+
+  ElMessage.success(`已替换为：${file.name}`)
 }
 
 const handleSubmit = async () => {
@@ -354,7 +379,11 @@ const handleSubmit = async () => {
 
     router.push(`/data/${dataId}`)
   } catch (error) {
-    ElMessage.error(error.error || '上传失败')
+    const message = error?.error === '该文件已上传过'
+      ? '相同内容的文件已上传过，即使文件名不同也会被识别为重复'
+      : (error?.error || '上传失败')
+
+    ElMessage.error(message)
   } finally {
     uploading.value = false
   }
@@ -368,6 +397,10 @@ const handleSubmit = async () => {
 
 .upload-area {
   width: 100%;
+}
+
+.upload-format-tip {
+  line-height: 1.7;
 }
 
 .quota-info {

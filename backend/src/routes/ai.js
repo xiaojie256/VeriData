@@ -108,19 +108,24 @@ const runAiAnalysis = async (dataId, data, llmConfig) => {
       anomaly_detected: result.anomaly_detected || result.has_anomaly
     })
   } catch (error) {
+    const responseData = error.response?.data || {}
+
     const reason =
-      error.response?.data?.error ||
+      responseData.error ||
+      responseData.details?.error ||
       error.message ||
       'AI服务调用失败'
 
     logger.error('AI检测执行失败:', {
       dataId,
       reason,
-      status: error.response?.status
+      status: error.response?.status,
+      response: responseData
     })
 
     await markAiFailed(dataId, reason, {
-      status: error.response?.status || null
+      status: error.response?.status || null,
+      ai_service_response: responseData
     })
   }
 }
