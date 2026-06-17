@@ -316,9 +316,44 @@ async function updateAiTestResult(result = {}) {
   );
 }
 
+async function getRuntimeAiReviewConfig() {
+  const config = await getAiConfig({ includeSecret: true });
+
+  if (!config.enabled) {
+    return {
+      enabled: false,
+      disabled_reason: 'AI审查配置未启用'
+    };
+  }
+
+  const missing = [];
+  if (!config.base_url) missing.push('API Base URL');
+  if (!config.model) missing.push('模型名称');
+  if (!config.api_key) missing.push('API Key');
+
+  if (missing.length > 0) {
+    return {
+      enabled: false,
+      disabled_reason: `AI审查配置不完整：${missing.join('、')}`
+    };
+  }
+
+  return {
+    enabled: true,
+    provider: config.provider || 'openai_compatible',
+    base_url: config.base_url,
+    model: config.model,
+    api_key: config.api_key,
+    temperature: Number(config.temperature ?? 0.3),
+    max_tokens: Number(config.max_tokens ?? 500),
+    timeout_ms: Number(config.timeout_ms ?? 30000)
+  };
+}
+
 module.exports = {
   getAiConfig,
   saveAiConfig,
   updateAiTestResult,
   normalizeBaseUrl,
+  getRuntimeAiReviewConfig,
 };

@@ -40,9 +40,9 @@
             
             <el-form-item label="可见性" prop="visibility">
               <el-radio-group v-model="form.visibility">
-                <el-radio label="private">私有（仅自己和审核人员可见）</el-radio>
+                <el-radio label="private">私有（仅自己、管理员和审核人员可见）</el-radio>
                 <el-radio label="limited">受限（指定人员可见）</el-radio>
-                <el-radio label="public">公开（终审通过后所有人可见）</el-radio>
+                <el-radio label="public">公开（最终审核通过后公开）</el-radio>
               </el-radio-group>
 
               <el-alert

@@ -174,23 +174,53 @@
 
     <!-- 提交审核对话框 -->
     <el-dialog v-model="submitDialogVisible" title="提交审核" width="480px" :close-on-click-modal="false">
-      <div v-if="teacher">
-        <p style="margin-bottom: 16px;">将提交给您的导师进行一审审核：</p>
-        <el-descriptions :column="1" border>
-          <el-descriptions-item label="导师姓名">{{ teacher.real_name || teacher.username }}</el-descriptions-item>
-          <el-descriptions-item label="邮箱">{{ teacher.email }}</el-descriptions-item>
-        </el-descriptions>
-      </div>
-      <el-empty v-else-if="!teacherLoading" description="您尚未绑定导师，请先在'我的导师'页面绑定导师后再提交审核">
-        <div style="display: flex; gap: 10px; justify-content: center;">
-          <el-button type="primary" @click="$router.push('/teacher')">去绑定导师</el-button>
-          <el-button @click="showSubmitDialog">重新加载</el-button>
+      <template v-if="needsTeacherReview">
+        <div v-if="teacher">
+          <p style="margin-bottom: 16px;">将提交给您的导师进行一审审核：</p>
+          <el-descriptions :column="1" border>
+            <el-descriptions-item label="导师姓名">
+              {{ teacher.real_name || teacher.username }}
+            </el-descriptions-item>
+            <el-descriptions-item label="邮箱">
+              {{ teacher.email }}
+            </el-descriptions-item>
+          </el-descriptions>
         </div>
-      </el-empty>
-      <div v-else v-loading="true" style="height: 80px;"></div>
+
+        <el-empty
+          v-else-if="!teacherLoading"
+          description="您尚未绑定导师，请先在'我的导师'页面绑定导师后再提交审核"
+        >
+          <div style="display: flex; gap: 10px; justify-content: center;">
+            <el-button type="primary" @click="$router.push('/teacher')">去绑定导师</el-button>
+            <el-button @click="showSubmitDialog">重新加载</el-button>
+          </div>
+        </el-empty>
+
+        <div v-else v-loading="true" style="height: 80px;"></div>
+      </template>
+
+      <template v-else>
+        <el-alert
+          type="info"
+          show-icon
+          :closable="false"
+          title="当前账号无需导师绑定"
+        >
+          <template #default>
+            管理员/教师账号提交的数据将跳过导师一审，直接进入管理员最终审核队列。可见性只控制谁能查看数据，不控制是否需要审核。
+          </template>
+        </el-alert>
+      </template>
+
       <template #footer>
         <el-button @click="submitDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="submitLoading" :disabled="!teacher" @click="submitReview">
+        <el-button
+          type="primary"
+          :loading="submitLoading"
+          :disabled="needsTeacherReview && !teacher"
+          @click="submitReview"
+        >
           确认提交
         </el-button>
       </template>
@@ -224,6 +254,8 @@ const currentUser = computed(() => {
 })
 
 const currentUserRole = computed(() => currentUser.value?.role || '')
+
+const needsTeacherReview = computed(() => currentUserRole.value === 'student')
 
 const canTriggerAiCheck = computed(() => {
   if (!data.value) return false
@@ -424,11 +456,19 @@ const downloadData = () => {
 }
 
 const showSubmitDialog = async () => {
-  teacherLoading.value = true
   submitDialogVisible.value = true
   teacher.value = null
+
+  if (!needsTeacherReview.value) {
+    teacherLoading.value = false
+    return
+  }
+
+  teacherLoading.value = true
+
   try {
     const response = await api.get('/users/my-tutor')
+
     if (response.teachers) {
       teacher.value = response.teachers
     } else {
@@ -443,17 +483,30 @@ const showSubmitDialog = async () => {
 }
 
 const submitReview = async () => {
-  if (!teacher.value || !teacher.value.id) {
+  if (needsTeacherReview.value && (!teacher.value || !teacher.value.id)) {
     ElMessage.warning('无法提交：未成功加载导师信息，请先前往"我的导师"页面完成绑定')
     return
   }
+
   submitLoading.value = true
+
   try {
-    await api.post(`/data/${route.params.id}/submit`, {
-      teacher_id: teacher.value.id,
+    const payload = {
       liability_accepted: true
-    })
-    ElMessage.success('提交审核成功，已进入AI检测与导师一审环节')
+    }
+
+    if (needsTeacherReview.value) {
+      payload.teacher_id = teacher.value.id
+    }
+
+    await api.post(`/data/${route.params.id}/submit`, payload)
+
+    ElMessage.success(
+      needsTeacherReview.value
+        ? '提交审核成功，已进入AI检测与导师一审环节'
+        : '提交审核成功，已进入管理员最终审核环节'
+    )
+
     submitDialogVisible.value = false
     await fetchData()
   } catch (err) {

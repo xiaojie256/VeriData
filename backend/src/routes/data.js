@@ -551,7 +551,7 @@ router.get('/:id/download', optionalAuth, auditLog('data', 'download'), async (r
 router.post(
   '/:id/submit',
   authenticate,
-  authorize('student', 'teacher'),
+  authorize('student', 'teacher', 'admin'),
   auditLog('data', 'create'),
   async (req, res) => {
     const connection = await pool.getConnection();
@@ -563,10 +563,6 @@ router.post(
 
       if (!Number.isFinite(dataId) || dataId <= 0) {
         return res.status(400).json({ error: '无效的数据ID' });
-      }
-
-      if (!Number.isFinite(teacherId) || teacherId <= 0) {
-        return res.status(400).json({ error: '请指定有效的导师' });
       }
 
       if (!liabilityAccepted) {
@@ -601,34 +597,6 @@ router.post(
         await connection.rollback();
         return res.status(400).json({ error: '该数据当前状态不允许提交审核' });
       }
-      const [teacherRows] = await connection.execute(
-        `SELECT id, status
-         FROM users
-         WHERE id = ?
-           AND role = 'teacher'
-           AND status = 'active'
-           AND deleted_at IS NULL`,
-        [teacherId]
-      );
-
-      if (teacherRows.length === 0) {
-        await connection.rollback();
-        return res.status(400).json({ error: '指定导师不存在或未通过身份验证' });
-      }
-
-      const [relations] = await connection.execute(
-        `SELECT id
-         FROM teacher_student_relations
-         WHERE teacher_id = ?
-           AND student_id = ?
-           AND status = 'active'`,
-        [teacherId, req.user.id]
-      );
-
-      if (relations.length === 0) {
-        await connection.rollback();
-        return res.status(403).json({ error: '只能提交给已确认绑定的导师审核' });
-      }
 
       await connection.execute(
         `DELETE FROM review_records
@@ -636,39 +604,114 @@ router.post(
         [dataId]
       );
 
+      if (req.user.role === 'student') {
+        if (!Number.isFinite(teacherId) || teacherId <= 0) {
+          await connection.rollback();
+          return res.status(400).json({ error: '请指定有效的导师' });
+        }
+
+        const [teacherRows] = await connection.execute(
+          `SELECT id, status
+           FROM users
+           WHERE id = ?
+             AND role = 'teacher'
+             AND status = 'active'
+             AND deleted_at IS NULL`,
+          [teacherId]
+        );
+
+        if (teacherRows.length === 0) {
+          await connection.rollback();
+          return res.status(400).json({ error: '指定导师不存在或未通过身份验证' });
+        }
+
+        const [relations] = await connection.execute(
+          `SELECT id
+           FROM teacher_student_relations
+           WHERE teacher_id = ?
+             AND student_id = ?
+             AND status = 'active'`,
+          [teacherId, req.user.id]
+        );
+
+        if (relations.length === 0) {
+          await connection.rollback();
+          return res.status(403).json({ error: '只能提交给已确认绑定的导师审核' });
+        }
+
+        await connection.execute(
+          `UPDATE data_submissions
+           SET review_status = 'teacher_reviewing',
+               submitted_at = NOW(),
+               is_liability_accepted = 1,
+               review_progress = 10
+           WHERE id = ?`,
+          [dataId]
+        );
+
+        await connection.execute(
+          `INSERT INTO review_records
+           (data_id, reviewer_id, review_type, status, is_blind_review)
+           VALUES (?, ?, 'teacher', 'pending', 0)`,
+          [dataId, teacherId]
+        );
+
+        await connection.execute(
+          `INSERT INTO notifications (user_id, type, title, content, related_type, related_id)
+           VALUES (?, 'review', '新的导师审核任务', ?, 'data', ?)`,
+          [
+            teacherId,
+            `学生 ${req.user.real_name || req.user.username} 提交了数据《${data.title}》，请进行导师一审。`,
+            dataId
+          ]
+        );
+
+        await connection.commit();
+
+        return res.json({
+          message: '数据已提交导师审核',
+          review_status: 'teacher_reviewing',
+          review_progress: 10
+        });
+      }
+
+      // 管理员/教师：跳过导师一审，直接进入管理员最终审核队列
       await connection.execute(
         `UPDATE data_submissions
-         SET review_status = 'teacher_reviewing',
+         SET review_status = 'expert_approved',
              submitted_at = NOW(),
              is_liability_accepted = 1,
-             review_progress = 10
+             review_progress = 70
          WHERE id = ?`,
         [dataId]
       );
 
       await connection.execute(
         `INSERT INTO review_records
-           (data_id, reviewer_id, review_type, status, is_blind_review)
-         VALUES (?, ?, 'teacher', 'pending', 0)`,
-        [dataId, teacherId]
+         (data_id, reviewer_id, review_type, status, is_blind_review)
+         VALUES (?, NULL, 'admin', 'pending', 0)`,
+        [dataId]
       );
 
       await connection.execute(
         `INSERT INTO notifications (user_id, type, title, content, related_type, related_id)
-         VALUES (?, 'review', '新的导师审核任务', ?, 'data', ?)`,
+         SELECT id, 'review', '新的最终审核任务', ?, 'data', ?
+         FROM users
+         WHERE role = 'admin'
+           AND status = 'active'
+           AND deleted_at IS NULL`,
         [
-          teacherId,
-          `学生 ${req.user.real_name || req.user.username} 提交了数据《${data.title}》，请进行导师一审。`,
+          `用户 ${req.user.real_name || req.user.username} 提交了数据《${data.title}》，请进行管理员最终审核。`,
           dataId
         ]
       );
 
       await connection.commit();
 
-      res.json({
-        message: '数据已提交导师审核',
-        review_status: 'teacher_reviewing',
-        review_progress: 10
+      return res.json({
+        message: '数据已提交管理员最终审核',
+        review_status: 'expert_approved',
+        review_progress: 70
       });
     } catch (error) {
       try {

@@ -5,7 +5,7 @@ const path = require('path');
 const pool = require('../utils/database');
 const logger = require('../utils/logger');
 const { authenticate, authorize } = require('../middleware/auth');
-const { getAiConfig } = require('../utils/aiConfig');
+const { getAiConfig, getRuntimeAiReviewConfig } = require('../utils/aiConfig');
 
 const router = express.Router();
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL || 'http://localhost:5000';
@@ -220,7 +220,7 @@ router.post('/analyze/:dataId', authenticate, async (req, res) => {
     }
 
     try {
-      llmConfig = await getAiConfig({ includeSecret: true })
+      llmConfig = await getRuntimeAiReviewConfig()
     } catch (configError) {
       logger.warn('读取AI审查配置失败，将仅使用本地基础检测:', {
         message: configError.message
