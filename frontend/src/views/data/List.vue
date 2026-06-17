@@ -93,6 +93,14 @@
           </template>
         </el-table-column>
 
+        <el-table-column prop="ai_check_status" label="AI检测" width="110">
+          <template #default="{ row }">
+            <el-tag :type="getAiStatusType(row.ai_check_status)" size="small">
+              {{ getAiStatusText(row.ai_check_status) }}
+            </el-tag>
+          </template>
+        </el-table-column>
+
         <el-table-column prop="ai_check_score" label="AI评分" width="100">
           <template #default="{ row }">
             <el-tag
@@ -201,7 +209,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, computed } from 'vue'
+import { ref, reactive, onMounted, onBeforeUnmount, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
@@ -254,6 +262,28 @@ const getScoreType = (score) => {
   return 'danger'
 }
 
+const getAiStatusText = (status) => {
+  const statusMap = {
+    pending: '待检测',
+    queued: '排队中',
+    running: '检测中',
+    completed: '已完成',
+    failed: '失败'
+  }
+  return statusMap[status] || '待检测'
+}
+
+const getAiStatusType = (status) => {
+  const typeMap = {
+    pending: 'info',
+    queued: 'warning',
+    running: 'warning',
+    completed: 'success',
+    failed: 'danger'
+  }
+  return typeMap[status] || 'info'
+}
+
 const canSubmit = (status) => ['draft', 'teacher_rejected', 'expert_rejected', 'final_rejected'].includes(status)
 
 const currentUserRole = computed(() => {
@@ -273,8 +303,11 @@ const canShowSubmit = (row) => {
 
 const canDelete = (status) => ['draft', 'final_rejected'].includes(status)
 
-const fetchData = async () => {
-  loading.value = true
+const fetchData = async ({ silent = false } = {}) => {
+  if (!silent) {
+    loading.value = true
+  }
+
   try {
     let url
     if (isViewingStudent.value) {
@@ -286,17 +319,62 @@ const fetchData = async () => {
     if (filters.data_type) url += `&data_type=${filters.data_type}`
 
     const response = await api.get(url)
-    dataList.value = response.data
-    pagination.total = response.pagination.total
+    dataList.value = Array.isArray(response.data) ? response.data : []
+    pagination.total = response.pagination?.total || 0
+
+    startAiPollingIfNeeded()
   } catch (error) {
-    if (error?.error) {
-      ElMessage.error(error.error)
-    } else {
-      ElMessage.error('获取数据失败')
+    if (!silent) {
+      if (error?.error) {
+        ElMessage.error(error.error)
+      } else {
+        ElMessage.error('获取数据失败')
+      }
     }
   } finally {
-    loading.value = false
+    if (!silent) {
+      loading.value = false
+    }
   }
+}
+
+const AI_POLLING_STATUSES = new Set(['pending', 'queued', 'running'])
+let aiPollingTimer = null
+let aiPollingActive = false
+
+const isAiPollingStatus = (status) => {
+  return AI_POLLING_STATUSES.has(status || '')
+}
+
+const hasAiPollingRows = () => {
+  return dataList.value.some((item) => isAiPollingStatus(item.ai_check_status))
+}
+
+const stopAiPolling = () => {
+  if (aiPollingTimer) {
+    window.clearInterval(aiPollingTimer)
+    aiPollingTimer = null
+  }
+}
+
+const startAiPollingIfNeeded = () => {
+  if (!hasAiPollingRows()) {
+    stopAiPolling()
+    return
+  }
+
+  if (aiPollingTimer) return
+
+  aiPollingTimer = window.setInterval(async () => {
+    if (aiPollingActive) return
+
+    aiPollingActive = true
+    try {
+      await fetchData({ silent: true })
+    } finally {
+      aiPollingActive = false
+    }
+  }, 3000)
 }
 
 const applyFilters = () => {
@@ -416,6 +494,10 @@ const deleteData = async (row) => {
 
 onMounted(() => {
   fetchData()
+})
+
+onBeforeUnmount(() => {
+  stopAiPolling()
 })
 </script>
 

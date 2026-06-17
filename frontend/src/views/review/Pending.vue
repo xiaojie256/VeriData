@@ -68,7 +68,12 @@
     </el-card>
     
     <!-- 审核对话框 -->
-    <el-dialog v-model="reviewDialogVisible" :title="reviewDialogTitle" width="700px">
+    <el-dialog
+      v-model="reviewDialogVisible"
+      :title="reviewDialogTitle"
+      width="980px"
+      class="expert-review-dialog"
+    >
       <div v-if="currentReview" class="review-dialog-content">
         <!-- 数据预览 -->
         <el-card class="preview-card">
@@ -111,34 +116,26 @@
         </el-card>
         
         <!-- 评分表单 -->
-        <el-form :model="reviewForm" label-width="100px">
-          <el-row :gutter="20">
-            <el-col :span="12">
-              <el-form-item label="完整性">
-                <el-rate v-model="reviewForm.completeness_score" :max="10" show-score />
-              </el-form-item>
-            </el-col>
-            <el-col :span="12">
-              <el-form-item label="准确性">
-                <el-rate v-model="reviewForm.accuracy_score" :max="10" show-score />
-              </el-form-item>
-            </el-col>
-          </el-row>
-          
-          <el-row :gutter="20">
-            <el-col :span="12">
-              <el-form-item label="原创性">
-                <el-rate v-model="reviewForm.originality_score" :max="10" show-score />
-              </el-form-item>
-            </el-col>
-            <el-col :span="12">
-              <el-form-item label="方法论">
-                <el-rate v-model="reviewForm.methodology_score" :max="10" show-score />
-              </el-form-item>
-            </el-col>
-          </el-row>
-          
-          <el-form-item label="综合评分">
+        <el-form :model="reviewForm" label-width="86px" class="review-score-form">
+          <div class="score-grid">
+            <el-form-item label="完整性" class="score-form-item">
+              <el-rate v-model="reviewForm.completeness_score" :max="10" show-score />
+            </el-form-item>
+
+            <el-form-item label="准确性" class="score-form-item">
+              <el-rate v-model="reviewForm.accuracy_score" :max="10" show-score />
+            </el-form-item>
+
+            <el-form-item label="原创性" class="score-form-item">
+              <el-rate v-model="reviewForm.originality_score" :max="10" show-score />
+            </el-form-item>
+
+            <el-form-item label="方法论" class="score-form-item">
+              <el-rate v-model="reviewForm.methodology_score" :max="10" show-score />
+            </el-form-item>
+          </div>
+
+          <el-form-item label="综合评分" class="overall-score-item">
             <el-rate v-model="reviewForm.overall_score" :max="10" show-score />
           </el-form-item>
           
@@ -295,5 +292,54 @@ onMounted(() => {
 .review-dialog-content {
   max-height: 60vh;
   overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.score-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(360px, 1fr));
+  column-gap: 28px;
+  row-gap: 6px;
+}
+
+.score-form-item {
+  margin-bottom: 16px;
+}
+
+.overall-score-item {
+  margin-bottom: 18px;
+}
+
+.review-score-form :deep(.el-form-item__content) {
+  min-width: 0;
+}
+
+.score-form-item :deep(.el-rate),
+.overall-score-item :deep(.el-rate) {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+
+.score-form-item :deep(.el-rate__text),
+.overall-score-item :deep(.el-rate__text) {
+  min-width: 24px;
+  margin-left: 8px;
+  text-align: left;
+}
+
+:global(.expert-review-dialog) {
+  max-width: calc(100vw - 32px);
+}
+
+:global(.expert-review-dialog .el-dialog__body) {
+  overflow-x: hidden;
+}
+
+@media (max-width: 900px) {
+  .score-grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

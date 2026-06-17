@@ -402,7 +402,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { ArrowLeft, Download } from '@element-plus/icons-vue'
@@ -422,6 +422,41 @@ const teacherLoading = ref(false)
 const submitLoading = ref(false)
 const aiRetryLoading = ref(false)
 
+const AI_POLLING_STATUSES = new Set(['pending', 'queued', 'running'])
+let aiPollingTimer = null
+let aiPollingActive = false
+
+const isAiPollingStatus = (status) => {
+  return AI_POLLING_STATUSES.has(status || '')
+}
+
+const stopAiPolling = () => {
+  if (aiPollingTimer) {
+    window.clearInterval(aiPollingTimer)
+    aiPollingTimer = null
+  }
+}
+
+const startAiPollingIfNeeded = () => {
+  if (!isAiPollingStatus(data.value?.ai_check_status)) {
+    stopAiPolling()
+    return
+  }
+
+  if (aiPollingTimer) return
+
+  aiPollingTimer = window.setInterval(async () => {
+    if (aiPollingActive) return
+
+    aiPollingActive = true
+    try {
+      await fetchData({ silent: true })
+    } finally {
+      aiPollingActive = false
+    }
+  }, 3000)
+}
+
 const currentUser = computed(() => {
   return store.state.user || JSON.parse(localStorage.getItem('user') || '{}')
 })
@@ -435,12 +470,10 @@ const canGoReviewCenter = computed(() => {
 const needsTeacherReview = computed(() => currentUserRole.value === 'student')
 
 const canTriggerAiCheck = computed(() => {
-  if (!data.value) return false
-  if (data.value.ai_check_status === 'running') return false
-
+  if (!data.value || data.value.ai_check_status === 'running') return false
   const role = currentUserRole.value
   return ['admin', 'teacher', 'expert'].includes(role) ||
-    data.value.user_id === currentUser.value?.id
+    Number(data.value.submitter_id) === Number(currentUser.value?.id)
 })
 
 const statusMap = {
@@ -665,21 +698,27 @@ const aiFailureReason = computed(() => {
   }
 })
 
-const fetchData = async () => {
+const fetchData = async ({ silent = false } = {}) => {
   try {
     const response = await api.get(`/data/${route.params.id}`)
     data.value = response.data
 
     const aiDetails = parseJsonMaybe(response.data?.ai_check_result)
     aiResult.value = normalizeAiResult(aiDetails, response.data?.ai_check_score)
+
+    startAiPollingIfNeeded()
   } catch (error) {
-    if (error?.error) {
-      ElMessage.error(error.error)
-    } else {
-      ElMessage.error('获取数据详情失败')
+    if (!silent) {
+      if (error?.error) {
+        ElMessage.error(error.error)
+      } else {
+        ElMessage.error('获取数据详情失败')
+      }
     }
+
     // 404或403时才跳转到列表页，401由响应拦截器处理
     if (error?.error === '数据不存在' || error?.error === '无权查看此数据') {
+      stopAiPolling()
       router.push('/data/list')
     }
   }
@@ -797,6 +836,10 @@ const submitReview = async () => {
 onMounted(() => {
   fetchData()
   fetchReviewRecords()
+})
+
+onBeforeUnmount(() => {
+  stopAiPolling()
 })
 </script>
 
