@@ -321,8 +321,11 @@ router.post(
   authorize("expert", "admin"),
   auditLog("review", "review"),
   async (req, res) => {
+    const connection = await pool.getConnection();
+    let transactionStarted = false;
+
     try {
-      const reviewId = req.params.id;
+      const reviewId = Number.parseInt(req.params.id, 10);
       const {
         status,
         completeness_score,
@@ -336,117 +339,192 @@ router.post(
         ai_analysis,
       } = req.body;
 
+      if (!Number.isFinite(reviewId) || reviewId <= 0) {
+        return res.status(400).json({ error: "无效的审核记录ID" });
+      }
+
       if (!ALLOWED_REVIEW_DECISIONS.has(status)) {
         return res.status(400).json({ error: "无效的审核结论" });
       }
 
-      // 验证审核记录
-      const [reviews] = await pool.execute(
-        `SELECT r.*, d.id as data_id, d.title, d.submitter_id, d.review_status
-       FROM review_records r
-       JOIN data_submissions d ON r.data_id = d.id
-       WHERE r.id = ?
-         AND r.review_type = 'expert'
-         AND r.status = 'pending'
-         AND d.deleted_at IS NULL
-         AND (r.reviewer_id IS NULL OR r.reviewer_id = ?)`,
-        [reviewId, req.user.id],
+      await connection.beginTransaction();
+      transactionStarted = true;
+
+      const params = [reviewId];
+      let permissionClause = "";
+
+      if (req.user.role !== "admin") {
+        permissionClause = "AND (r.reviewer_id IS NULL OR r.reviewer_id = ?)";
+        params.push(req.user.id);
+      }
+
+      const [reviews] = await connection.execute(
+        `SELECT
+           r.*,
+           d.id AS data_id,
+           d.title,
+           d.submitter_id,
+           d.review_status
+         FROM review_records r
+         JOIN data_submissions d ON r.data_id = d.id
+         WHERE r.id = ?
+           AND r.review_type = 'expert'
+           AND r.status = 'pending'
+           AND d.deleted_at IS NULL
+           ${permissionClause}
+         FOR UPDATE`,
+        params
       );
 
       if (reviews.length === 0) {
-        return res.status(404).json({ error: "审核记录不存在" });
+        await connection.rollback();
+        transactionStarted = false;
+        return res.status(404).json({ error: "审核记录不存在、已处理或无权限" });
       }
 
       const review = reviews[0];
 
       if (review.review_status !== "expert_reviewing") {
+        await connection.rollback();
+        transactionStarted = false;
         return res.status(409).json({
-          error: `当前数据状态为 ${review.review_status}，不能进行专家盲审`
+          error: `当前数据状态为 ${review.review_status}，不能进行专家盲审`,
         });
       }
 
-      // 如果原记录未分配专家，则第一次提交时锁定到当前专家
-      if (!review.reviewer_id) {
-        const [claimResult] = await pool.execute(
+      // 未分配专家的盲审记录，首次提交时锁定给当前专家。
+      if (req.user.role !== "admin" && !review.reviewer_id) {
+        const [claimResult] = await connection.execute(
           "UPDATE review_records SET reviewer_id = ? WHERE id = ? AND reviewer_id IS NULL AND status = 'pending'",
-          [req.user.id, reviewId],
+          [req.user.id, reviewId]
         );
 
         if (claimResult.affectedRows !== 1) {
+          await connection.rollback();
+          transactionStarted = false;
           return res.status(409).json({ error: "该审核已被其他专家领取，请刷新列表" });
         }
       }
 
-      // 更新审核记录
-      await pool.execute(
+      await connection.execute(
         `UPDATE review_records
-       SET status = ?, completeness_score = ?, accuracy_score = ?, originality_score = ?,
-           methodology_score = ?, overall_score = ?, comments = ?, issues_found = ?,
-           suggestions = ?, ai_assisted = ?, ai_analysis = ?, completed_at = NOW()
-       WHERE id = ?`,
+         SET status = ?,
+             completeness_score = ?,
+             accuracy_score = ?,
+             originality_score = ?,
+             methodology_score = ?,
+             overall_score = ?,
+             comments = ?,
+             issues_found = ?,
+             suggestions = ?,
+             ai_assisted = ?,
+             ai_analysis = ?,
+             completed_at = NOW()
+         WHERE id = ?`,
         [
           status,
-          completeness_score,
-          accuracy_score,
-          originality_score,
-          methodology_score,
-          overall_score,
-          comments,
+          normalizeReviewScore(completeness_score),
+          normalizeReviewScore(accuracy_score),
+          normalizeReviewScore(originality_score),
+          normalizeReviewScore(methodology_score),
+          normalizeReviewScore(overall_score),
+          comments || null,
           JSON.stringify(issues_found || []),
-          suggestions,
+          suggestions || null,
           ai_analysis ? 1 : 0,
-          ai_analysis,
+          ai_analysis || null,
           reviewId,
-        ],
+        ]
       );
 
-      let newStatus, progress, message;
+      let newStatus;
+      let progress;
+      let message;
+      let notificationTitle;
+      let notificationContent;
 
       if (status === "approved") {
         newStatus = "expert_approved";
         progress = 70;
         message = "专家盲审通过，等待最终审核";
+        notificationTitle = "专家盲审通过";
+        notificationContent = `您的数据《${review.title}》已通过专家盲审，等待管理员最终审核。`;
 
-        // 创建管理员终审记录
-        await pool.execute(
+        // 避免旧的半失败状态或重复点击导致重复创建管理员终审记录。
+        await connection.execute(
           `INSERT INTO review_records (data_id, reviewer_id, review_type, status, is_blind_review)
-         VALUES (?, NULL, 'admin', 'pending', 0)`,
-          [review.data_id],
+           SELECT ?, NULL, 'admin', 'pending', 0
+           WHERE NOT EXISTS (
+             SELECT 1
+             FROM review_records
+             WHERE data_id = ?
+               AND review_type = 'admin'
+               AND status = 'pending'
+           )`,
+          [review.data_id, review.data_id]
         );
       } else if (status === "rejected") {
         newStatus = "expert_rejected";
         progress = 0;
+        message = "专家盲审未通过";
+        notificationTitle = "专家盲审未通过";
+        notificationContent = `您的数据《${review.title}》未通过专家盲审，请修改后重新提交。`;
       } else {
         newStatus = "expert_rejected";
         progress = 0;
-        message = "需要修改后重新提交";
+        message = "专家要求修改后重新提交";
+        notificationTitle = "数据需要修改";
+        notificationContent = `您的数据《${review.title}》需要修改，请根据专家意见完善后重新提交。`;
       }
 
-      await pool.execute(
+      await connection.execute(
         "UPDATE data_submissions SET review_status = ?, review_progress = ? WHERE id = ?",
-        [newStatus, progress, review.data_id],
+        [newStatus, progress, review.data_id]
       );
 
-      // 通知提交者（盲审不透露专家信息）
-      await pool.execute(
+      await connection.execute(
         `INSERT INTO notifications (user_id, type, title, content, related_type, related_id)
-       VALUES (?, 'review', ?, ?, 'data', ?)`,
-        [
-          review.submitter_id,
-          status === "approved" ? "专家盲审通过" : "专家盲审未通过",
-          `您的数据《${review.title}》${status === "approved" ? "已通过专家盲审" : "未通过专家盲审，请修改后重新提交"}`,
-          review.data_id,
-        ],
+         VALUES (?, 'review', ?, ?, 'data', ?)`,
+        [review.submitter_id, notificationTitle, notificationContent, review.data_id]
       );
+
+      await connection.commit();
+      transactionStarted = false;
 
       logger.info(`专家审核完成: review_id=${reviewId}, status=${status}`);
-
       res.json({ message, new_status: newStatus });
     } catch (error) {
-      logger.error("专家审核失败:", error);
-      res.status(500).json({ error: "审核失败" });
+      if (transactionStarted) {
+        await connection.rollback();
+      }
+
+      logger.error("专家审核失败:", {
+        message: error.message,
+        code: error.code,
+        errno: error.errno,
+        sqlState: error.sqlState,
+        sqlMessage: error.sqlMessage,
+      });
+
+      let clientMessage = "审核失败";
+
+      if (
+        error.code === "ER_TRUNCATED_WRONG_VALUE_FOR_FIELD" ||
+        error.code === "WARN_DATA_TRUNCATED" ||
+        /Data truncated/i.test(error.sqlMessage || error.message || "")
+      ) {
+        clientMessage = "审核失败：数据库枚举字段未同步，请执行最新迁移后重试";
+      } else if (error.code === "ER_BAD_FIELD_ERROR") {
+        clientMessage = "审核失败：数据库字段未同步，请执行最新迁移后重试";
+      } else if (error.code === "ER_NO_REFERENCED_ROW_2") {
+        clientMessage = "审核失败：关联数据不存在或已被删除";
+      }
+
+      res.status(500).json({ error: clientMessage });
+    } finally {
+      connection.release();
     }
-  },
+  }
 );
 
 // 获取AI辅助分析结果

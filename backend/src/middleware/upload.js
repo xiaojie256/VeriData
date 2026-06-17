@@ -2,6 +2,7 @@ const multer = require('multer');
 const path = require('path');
 const crypto = require('crypto');
 const fs = require('fs');
+const { normalizeOriginalFilename } = require('../utils/filename');
 
 const UPLOAD_PATH = process.env.UPLOAD_PATH || './uploads';
 
@@ -59,6 +60,8 @@ const storage = multer.diskStorage({
     cb(null, destPath);
   },
   filename: (req, file, cb) => {
+    file.originalname = normalizeOriginalFilename(file.originalname);
+
     const uniqueSuffix = crypto.randomUUID();
     const ext = path.extname(file.originalname);
     cb(null, `${Date.now()}-${uniqueSuffix}${ext}`);
@@ -67,6 +70,8 @@ const storage = multer.diskStorage({
 
 // 文件过滤器：先校验扩展名，落盘后再校验 magic bytes
 const fileFilter = (req, file, cb) => {
+  file.originalname = normalizeOriginalFilename(file.originalname);
+
   const allowedTypes = {
     'data': ['.csv', '.xlsx', '.xls', '.json', '.txt', '.pdf', '.doc', '.docx', '.zip', '.rar'],
     'avatar': ['.jpg', '.jpeg', '.png', '.gif'],
@@ -115,6 +120,8 @@ const handleUploadError = (err, req, res, next) => {
 // 后置 magic bytes 校验：文件已落盘后校验真实内容，防止伪造后缀绕过
 const verifyFileIntegrity = (req, res, next) => {
   if (!req.file) return next();
+
+  req.file.originalname = normalizeOriginalFilename(req.file.originalname);
 
   const ext = path.extname(req.file.originalname).toLowerCase();
   if (SKIP_MAGIC_CHECK.has(ext)) return next();

@@ -272,7 +272,7 @@ const submitReview = async () => {
     reviewDialogVisible.value = false
     fetchData()
   } catch (error) {
-    ElMessage.error(error.error || '审核提交失败')
+    ElMessage.error(error?.error || error?.message || '审核提交失败')
   }
 }
 

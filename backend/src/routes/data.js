@@ -8,6 +8,7 @@ const { authenticate, authorize, optionalAuth } = require('../middleware/auth');
 const { upload, handleUploadError, verifyFileIntegrity } = require('../middleware/upload');
 const { auditLog } = require('../middleware/audit');
 const { withTransaction } = require('../utils/transaction');
+const { normalizeOriginalFilename, buildContentDisposition } = require('../utils/filename');
 
 const router = express.Router();
 const UPLOAD_PATH = process.env.UPLOAD_PATH || './uploads';
@@ -241,6 +242,7 @@ router.post('/upload', authenticate, authorize('student', 'teacher', 'admin', 'c
         liability_statement,
         liability_accepted
       } = req.body;
+      const originalFilename = normalizeOriginalFilename(req.file.originalname);
 
       if (!VISIBILITY_VALUES.has(visibility)) {
         throw new Error('INVALID_VISIBILITY');
@@ -284,14 +286,14 @@ router.post('/upload', authenticate, authorize('student', 'teacher', 'admin', 'c
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           req.user.id,
-          title || req.file.originalname,
+          title || originalFilename,
           description || null,
           data_type,
-          normalizeDataFormat(req.file.originalname),
+          normalizeDataFormat(originalFilename),
           req.file.path,
           req.file.size,
           fileHash,
-          req.file.originalname,
+          originalFilename,
           visibility,
           storedViewPermission,
           liability_statement || null,
@@ -612,7 +614,21 @@ router.get('/:id/download', optionalAuth, auditLog('data', 'download'), async (r
       [dataId]
     );
 
-    res.download(data.file_path, data.original_filename);
+    const downloadFilename = normalizeOriginalFilename(data.original_filename || path.basename(data.file_path));
+
+    res.setHeader('Content-Type', 'application/octet-stream; charset=utf-8');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Disposition', buildContentDisposition(downloadFilename));
+
+    return res.sendFile(path.resolve(data.file_path), (sendError) => {
+      if (sendError) {
+        logger.error('发送下载文件失败:', sendError);
+
+        if (!res.headersSent) {
+          res.status(500).json({ error: '下载失败' });
+        }
+      }
+    });
   } catch (error) {
     logger.error('下载数据失败:', error);
     res.status(500).json({ error: '下载失败' });
