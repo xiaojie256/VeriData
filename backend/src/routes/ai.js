@@ -137,9 +137,9 @@ router.post('/analyze/:dataId', authenticate, async (req, res) => {
 
   try {
     const [dataList] = await pool.execute(
-      `SELECT id, user_id, title, file_path, file_hash, data_format, ai_check_status
+      `SELECT id, submitter_id, title, file_path, file_hash, data_format, ai_check_status
        FROM data_submissions
-       WHERE id = ?`,
+       WHERE id = ? AND deleted_at IS NULL`,
       [dataId]
     )
 
@@ -152,7 +152,7 @@ router.post('/analyze/:dataId', authenticate, async (req, res) => {
     const data = dataList[0]
 
     const canAnalyze =
-      data.user_id === req.user.id ||
+      Number(data.submitter_id) === Number(req.user.id) ||
       ['admin', 'teacher', 'expert'].includes(req.user.role)
 
     if (!canAnalyze) {
@@ -311,14 +311,16 @@ router.post('/public-check', async (req, res) => {
       return res.status(413).json({ error: '数据内容过大，最大支持 1MB' });
     }
 
-    if (false) {
-      return res.status(400).json({ error: '请提供数据内容' });
-    }
-
-    const response = await axios.post(`${AI_SERVICE_URL}/quick-check`, {
-      data_content,
-      is_public: true
-    });
+    const response = await axios.post(
+      `${AI_SERVICE_URL}/quick-check`,
+      {
+        data_content,
+        is_public: true
+      },
+      {
+        timeout: 30000
+      }
+    );
 
     res.json({
       ...response.data,

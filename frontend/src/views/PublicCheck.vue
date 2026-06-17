@@ -27,7 +27,7 @@
                 action="#"
                 :auto-upload="false"
                 :on-change="handleFileChange"
-                accept=".csv,.txt"
+                accept=".csv,.txt,.json"
               >
                 <el-icon class="el-icon--upload"><upload-filled /></el-icon>
                 <div class="el-upload__text">
@@ -69,14 +69,30 @@
           <div class="result-summary">
             <h4>数据概览</h4>
             <el-descriptions :column="2" border>
+              <el-descriptions-item label="格式">{{ (result.format || 'unknown').toUpperCase() }}</el-descriptions-item>
+              <el-descriptions-item label="评分">{{ result.score ?? '-' }}</el-descriptions-item>
               <el-descriptions-item label="列数">{{ result.columns?.length || 0 }}</el-descriptions-item>
               <el-descriptions-item label="行数">{{ result.rows || 0 }}</el-descriptions-item>
-              <el-descriptions-item label="是否有效" :span="2">
+              <el-descriptions-item label="风险等级">
+                <el-tag :type="riskTagType">
+                  {{ riskLabel }}
+                </el-tag>
+              </el-descriptions-item>
+              <el-descriptions-item label="是否有效">
                 <el-tag :type="result.is_valid ? 'success' : 'danger'">
                   {{ result.is_valid ? '有效' : '无效' }}
                 </el-tag>
               </el-descriptions-item>
             </el-descriptions>
+
+            <el-alert
+              v-if="result.summary"
+              :title="result.summary"
+              type="info"
+              show-icon
+              :closable="false"
+              style="margin-top: 12px;"
+            />
           </div>
           
           <!-- 数据预览 -->
@@ -94,13 +110,13 @@
           </div>
           
           <!-- 问题列表 -->
-          <div v-if="result.issues?.length" class="result-issues">
+          <div v-if="displayIssues.length" class="result-issues">
             <h4>发现的问题</h4>
             <el-alert
-              v-for="(issue, idx) in result.issues"
+              v-for="(issue, idx) in displayIssues"
               :key="idx"
-              :title="issue"
-              type="warning"
+              :title="issue.message"
+              :type="issue.severity === 'high' ? 'error' : issue.severity === 'medium' ? 'warning' : 'info'"
               show-icon
               :closable="false"
               style="margin-bottom: 10px;"
@@ -147,15 +163,56 @@ const dataContent = ref('')
 const checking = ref(false)
 const result = ref(null)
 
+const displayIssues = computed(() => {
+  const details = result.value?.issue_details
+  if (Array.isArray(details) && details.length > 0) {
+    return details.map(item => ({
+      message: item.message || String(item),
+      severity: item.severity || 'medium',
+      type: item.type || 'unknown'
+    }))
+  }
+
+  const issues = result.value?.issues
+  if (Array.isArray(issues)) {
+    return issues.map(item => ({
+      message: typeof item === 'string' ? item : (item.message || JSON.stringify(item)),
+      severity: item.severity || 'medium',
+      type: item.type || 'unknown'
+    }))
+  }
+
+  return []
+})
+
+const riskLabel = computed(() => {
+  const level = result.value?.risk_level
+  if (level === 'high') return '高风险'
+  if (level === 'medium') return '中风险'
+  if (level === 'low') return '低风险'
+  if (level === 'none') return '未发现明显风险'
+  return '未知'
+})
+
+const riskTagType = computed(() => {
+  const level = result.value?.risk_level
+  if (level === 'high') return 'danger'
+  if (level === 'medium') return 'warning'
+  if (level === 'low') return 'info'
+  return 'success'
+})
+
 const resultType = computed(() => {
   if (!result.value?.is_valid) return 'danger'
-  if (result.value?.issues?.length > 0) return 'warning'
+  if (result.value?.risk_level === 'high') return 'danger'
+  if (result.value?.risk_level === 'medium' || displayIssues.value.length > 0) return 'warning'
   return 'success'
 })
 
 const resultTitle = computed(() => {
   if (!result.value?.is_valid) return '检测失败'
-  if (result.value?.issues?.length > 0) return '发现问题'
+  if (result.value?.risk_level === 'high') return '发现高风险'
+  if (result.value?.risk_level === 'medium' || displayIssues.value.length > 0) return '发现问题'
   return '数据正常'
 })
 

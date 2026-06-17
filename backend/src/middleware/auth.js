@@ -23,6 +23,7 @@ const authenticate = async (req, res, next) => {
     await assertSessionIsCurrent(decoded.userId, decoded.sessionId);
 
     req.auth = {
+      token,
       userId: decoded.userId,
       sessionId: decoded.sessionId
     };

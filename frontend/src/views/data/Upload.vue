@@ -114,7 +114,7 @@
                 </div>
                 <template #tip>
                   <div class="el-upload__tip">
-                    支持格式: CSV, Excel, JSON, TXT, PDF, ZIP | 最大100MB
+                    当前每次仅支持上传 1 个文件；支持格式: CSV, Excel, JSON, TXT, PDF, ZIP | 最大100MB
                   </div>
                 </template>
               </el-upload>

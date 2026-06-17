@@ -138,10 +138,27 @@ const handleCommand = (command) => {
         confirmButtonText: '确定',
         cancelButtonText: '取消',
         type: 'warning'
-      }).then(() => {
-        store.dispatch('logout')
-        router.push('/login')
-        ElMessage.success('已退出登录')
+      }).then(async () => {
+        try {
+          if (pollTimer) {
+            clearInterval(pollTimer)
+            pollTimer = null
+          }
+
+          await store.dispatch('logout')
+
+          await router.replace('/login')
+
+          ElMessage.success('已退出登录')
+        } catch (error) {
+          console.error('退出登录跳转失败:', error)
+
+          // 兜底：如果 Vue Router 被异常状态拦截，强制刷新到登录页
+          window.location.replace('/login')
+        }
+
+      }).catch(() => {
+        // 用户取消退出，不需要提示错误
       })
       break
   }

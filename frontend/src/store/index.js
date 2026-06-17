@@ -1,7 +1,28 @@
 import { createStore } from "vuex";
 import axios from "axios";
 
-// 🔴 核心修复：全站统一强制走相对路径！不管什么页面发请求，通通对齐发给前端自己的开发服务器
+const isValidToken = (token) => {
+  return typeof token === "string" &&
+    token.trim() !== "" &&
+    token !== "null" &&
+    token !== "undefined";
+};
+
+const getStoredToken = () => {
+  const token = localStorage.getItem("token");
+  if (!isValidToken(token)) {
+    localStorage.removeItem("token");
+    return null;
+  }
+  return token;
+};
+
+const clearAuthStorage = () => {
+  localStorage.removeItem("token");
+  localStorage.removeItem("user");
+};
+
+// 核心修复：全站统一强制走相对路径！不管什么页面发请求，通通对齐发给前端自己的开发服务器
 const api = axios.create({
   baseURL: "/api",
   timeout: 30000,
@@ -10,8 +31,8 @@ const api = axios.create({
 // 请求拦截器
 api.interceptors.request.use(
   (config) => {
-    // 🔴 核心修复：删掉之前临时加的 URL 补丁，保持干净
-    const token = localStorage.getItem("token");
+    // 核心修复：删掉之前临时加的 URL 补丁，保持干净
+    const token = getStoredToken();
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
@@ -32,9 +53,7 @@ api.interceptors.response.use(
 
     // 1. 如果是 401 未登录 / 会话失效 / 异地登录，或者 403 且后端明确返回账号被封禁
     if (status === 401 || (status === 403 && errorMsg === "账号已被封禁")) {
-      // 清除本地过期的无用凭证
-      localStorage.removeItem("token");
-      localStorage.removeItem("user");
+      clearAuthStorage();
 
       // 新增：判断当前是否已经在登录页
       const isAtLogin = window.location.pathname.includes("/login");
@@ -67,7 +86,7 @@ api.interceptors.response.use(
   },
 );
 
-export { api };
+export { api, getStoredToken, clearAuthStorage };
 
 // 安全地从localStorage解析用户数据
 const parseUserFromStorage = () => {
@@ -87,7 +106,7 @@ const parseUserFromStorage = () => {
 export default createStore({
   state: {
     user: parseUserFromStorage(),
-    token: localStorage.getItem("token") || null,
+    token: getStoredToken(),
     notifications: [],
     unreadCount: 0,
   },
@@ -105,14 +124,20 @@ export default createStore({
       localStorage.setItem("user", JSON.stringify(user));
     },
     SET_TOKEN(state, token) {
-      state.token = token;
-      localStorage.setItem("token", token);
+      if (isValidToken(token)) {
+        state.token = token;
+        localStorage.setItem("token", token);
+      } else {
+        state.token = null;
+        localStorage.removeItem("token");
+      }
     },
     CLEAR_AUTH(state) {
       state.user = null;
       state.token = null;
-      localStorage.removeItem("user");
-      localStorage.removeItem("token");
+      state.notifications = [];
+      state.unreadCount = 0;
+      clearAuthStorage();
     },
     SET_NOTIFICATIONS(state, notifications) {
       state.notifications = notifications;
@@ -143,8 +168,23 @@ export default createStore({
 
     // 登出
     async logout({ commit }) {
+      const token = getStoredToken();
+
       try {
-        await api.post("/auth/logout");
+        // 使用原生 axios，而不是 api 实例，避免 api 响应拦截器在 401 时返回挂起 Promise，导致退出流程卡住
+        if (token) {
+          await axios.post(
+            "/api/auth/logout",
+            {},
+            {
+              headers: {
+                Authorization: `Bearer ${token}`,
+              },
+              timeout: 10000,
+              validateStatus: () => true,
+            },
+          );
+        }
       } catch (error) {
         console.warn("服务端退出登录失败，继续清理本地登录状态:", error);
       } finally {

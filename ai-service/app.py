@@ -460,50 +460,416 @@ class DataAnalyzer:
             return f"大模型审计异常：{str(e)}"
     
     def quick_check(self, data_content):
-        """快速检测数据内容"""
+        """公开快速检测：支持 CSV / TSV / JSON / 普通文本，并识别基础质量、隐私、安全与合规风险"""
         try:
-            # 尝试解析为DataFrame
-            lines = data_content.strip().split('\n')
-            
-            if len(lines) < 2:
+            content = (data_content or '').strip()
+            if not content:
                 return {
                     'is_valid': False,
-                    'message': '数据行数不足'
+                    'message': '请提供数据内容',
+                    'issues': ['数据内容为空'],
+                    'issue_details': [],
+                    'risk_level': 'high',
+                    'format': 'unknown',
+                    'score': 0,
+                    'columns': [],
+                    'rows': 0,
+                    'preview': []
                 }
-            
-            # 简单CSV解析
-            try:
-                from io import StringIO
-                df = pd.read_csv(StringIO(data_content))
-                
-                result = {
-                    'is_valid': True,
-                    'columns': list(df.columns),
-                    'rows': len(df),
-                    'preview': df.head(5).to_dict('records'),
-                    'issues': []
-                }
-                
-                # 快速检查
-                if df.isnull().sum().sum() > len(df) * 0.1:
-                    result['issues'].append('数据缺失较多')
-                
-                if df.duplicated().sum() > 0:
-                    result['issues'].append('存在重复数据')
-                
-                return result
-                
-            except Exception as e:
+
+            parsed = self._parse_public_content(content)
+            df = parsed['df']
+            data_format = parsed['format']
+
+            if df is None or df.empty:
                 return {
                     'is_valid': False,
-                    'message': f'解析失败: {str(e)}'
+                    'message': parsed.get('message') or '无法解析数据内容',
+                    'issues': [parsed.get('message') or '无法解析数据内容'],
+                    'issue_details': [{
+                        'type': 'format_error',
+                        'severity': 'high',
+                        'message': parsed.get('message') or '无法解析数据内容'
+                    }],
+                    'risk_level': 'high',
+                    'format': data_format,
+                    'score': 0,
+                    'columns': [],
+                    'rows': 0,
+                    'preview': []
                 }
-                
+
+            issue_details = []
+            issue_details.extend(self._check_public_quality_issues(df))
+            issue_details.extend(self._check_public_privacy_issues(df, content))
+            issue_details.extend(self._check_public_security_issues(content))
+            issue_details.extend(self._check_public_fabrication_issues(df))
+            issue_details.extend(self._check_public_numeric_anomalies(df))
+            issue_details.extend(self._check_public_text_compliance_issues(content, data_format))
+
+            issue_details = self._deduplicate_issue_details(issue_details)
+            issues = [item['message'] for item in issue_details]
+
+            severity_rank = {'low': 1, 'medium': 2, 'high': 3}
+            max_severity = max([severity_rank.get(item.get('severity'), 1) for item in issue_details], default=0)
+            if max_severity >= 3:
+                risk_level = 'high'
+            elif max_severity == 2:
+                risk_level = 'medium'
+            elif max_severity == 1:
+                risk_level = 'low'
+            else:
+                risk_level = 'none'
+
+            score = 100
+            for item in issue_details:
+                severity = item.get('severity')
+                if severity == 'high':
+                    score -= 25
+                elif severity == 'medium':
+                    score -= 12
+                else:
+                    score -= 5
+            score = max(0, score)
+
+            return {
+                'is_valid': True,
+                'format': data_format,
+                'columns': [str(col) for col in df.columns],
+                'rows': int(len(df)),
+                'preview': df.head(5).where(pd.notnull(df), None).to_dict('records'),
+                'issues': issues,
+                'issue_details': issue_details,
+                'risk_level': risk_level,
+                'score': score,
+                'summary': self._build_public_check_summary(data_format, len(df), len(df.columns), risk_level, issue_details)
+            }
+
         except Exception as e:
+            logger.error(f"公开快速检测失败: {str(e)}")
             return {
                 'is_valid': False,
-                'message': str(e)
+                'message': f'检测失败: {str(e)}',
+                'issues': [f'检测失败: {str(e)}'],
+                'issue_details': [{
+                    'type': 'runtime_error',
+                    'severity': 'high',
+                    'message': f'检测失败: {str(e)}'
+                }],
+                'risk_level': 'high',
+                'format': 'unknown',
+                'score': 0,
+                'columns': [],
+                'rows': 0,
+                'preview': []
             }
+
+    def _parse_public_content(self, content):
+        """解析公开检测输入，优先 JSON，其次 CSV/TSV，最后普通文本"""
+        from io import StringIO
+
+        stripped = content.lstrip()
+
+        # JSON：支持数组、对象、对象内 records/data/items/list 字段
+        if stripped.startswith('{') or stripped.startswith('['):
+            try:
+                parsed_json = json.loads(content)
+
+                records = parsed_json
+                if isinstance(parsed_json, dict):
+                    for key in ['records', 'data', 'items', 'list', 'rows']:
+                        if isinstance(parsed_json.get(key), list):
+                            records = parsed_json[key]
+                            break
+
+                if isinstance(records, list):
+                    if len(records) == 0:
+                        return {'df': pd.DataFrame(), 'format': 'json', 'message': 'JSON 数组为空'}
+                    if all(isinstance(item, dict) for item in records):
+                        return {'df': pd.json_normalize(records), 'format': 'json'}
+                    return {'df': pd.DataFrame({'value': records}), 'format': 'json'}
+
+                if isinstance(records, dict):
+                    return {'df': pd.json_normalize(records), 'format': 'json'}
+
+                return {'df': pd.DataFrame({'value': [records]}), 'format': 'json'}
+            except Exception as e:
+                return {'df': None, 'format': 'json', 'message': f'JSON 解析失败: {str(e)}'}
+
+        # CSV / TSV
+        try:
+            separator = '\t' if '\t' in content.splitlines()[0] else ','
+            df = pd.read_csv(
+                StringIO(content),
+                sep=separator,
+                engine='python',
+                on_bad_lines='error'
+            )
+            return {'df': df, 'format': 'tsv' if separator == '\t' else 'csv'}
+        except Exception as csv_error:
+            # 普通文本：不强行判失败，但后续只做文本风险识别
+            lines = [line.strip() for line in content.splitlines() if line.strip()]
+            if len(lines) >= 1:
+                return {'df': pd.DataFrame({'text': lines}), 'format': 'text'}
+            return {'df': None, 'format': 'unknown', 'message': f'解析失败: {str(csv_error)}'}
+
+    def _check_public_quality_issues(self, df):
+        issues = []
+
+        total_cells = max(1, int(df.shape[0] * df.shape[1]))
+        missing_count = int(df.isnull().sum().sum())
+        missing_ratio = missing_count / total_cells
+
+        if missing_ratio > 0.3:
+            issues.append({
+                'type': 'missing_values',
+                'severity': 'high',
+                'message': f'数据缺失较多，缺失单元格占比约 {round(missing_ratio * 100, 1)}%'
+            })
+        elif missing_ratio > 0.1:
+            issues.append({
+                'type': 'missing_values',
+                'severity': 'medium',
+                'message': f'存在一定缺失值，缺失单元格占比约 {round(missing_ratio * 100, 1)}%'
+            })
+
+        duplicate_count = int(df.duplicated().sum())
+        if duplicate_count > 0:
+            duplicate_ratio = duplicate_count / max(1, len(df))
+            severity = 'high' if duplicate_ratio > 0.3 else 'medium'
+            issues.append({
+                'type': 'duplicate_rows',
+                'severity': severity,
+                'message': f'存在重复数据，重复行数 {duplicate_count}，占比约 {round(duplicate_ratio * 100, 1)}%'
+            })
+
+        if len(df) < 3:
+            issues.append({
+                'type': 'small_sample',
+                'severity': 'low',
+                'message': '数据行数较少，检测结论可信度有限'
+            })
+
+        return issues
+
+    def _check_public_privacy_issues(self, df, content):
+        issues = []
+
+        patterns = [
+            ('phone', r'(?<!\d)1[3-9]\d{9}(?!\d)', '手机号'),
+            ('email', r'[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}', '邮箱'),
+            ('id_card', r'(?<!\d)[1-9]\d{5}(18|19|20)\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\d{3}[\dXx](?!\d)', '身份证号')
+        ]
+
+        for code, pattern, label in patterns:
+            if self._regex_search(pattern, content):
+                issues.append({
+                    'type': f'privacy_{code}',
+                    'severity': 'high',
+                    'message': f'检测到疑似敏感个人信息：{label}'
+                })
+
+        sensitive_column_keywords = {
+            'phone': '手机号',
+            'mobile': '手机号',
+            'tel': '电话号码',
+            'email': '邮箱',
+            'id_card': '身份证号',
+            'identity': '身份证号',
+            '身份证': '身份证号',
+            'address': '地址',
+            '地址': '地址'
+        }
+
+        lower_columns = [str(col).lower() for col in df.columns]
+        for keyword, label in sensitive_column_keywords.items():
+            if any(keyword in col for col in lower_columns):
+                issues.append({
+                    'type': 'privacy_column',
+                    'severity': 'high',
+                    'message': f'字段中包含疑似敏感信息列：{label}'
+                })
+
+        address_keywords = ['省', '市', '区', '县', '镇', '路', '街', '号', '小区', '学院', '大学']
+        if 'address' in ''.join(lower_columns) or '地址' in ''.join(map(str, df.columns)):
+            issues.append({
+                'type': 'privacy_address',
+                'severity': 'high',
+                'message': '检测到地址字段，可能涉及个人位置隐私'
+            })
+        elif sum(1 for word in address_keywords if word in content) >= 3:
+            issues.append({
+                'type': 'privacy_address',
+                'severity': 'medium',
+                'message': '文本中包含较多地址特征词，建议确认是否存在位置隐私'
+            })
+
+        return issues
+
+    def _check_public_security_issues(self, content):
+        issues = []
+
+        security_rules = [
+            ('prompt_injection', r'(忽略|无视|绕过).{0,20}(规则|指令|审核|系统|限制)', '检测到疑似提示词注入：要求忽略/绕过审核规则'),
+            ('prompt_injection', r'(直接返回|输出).{0,20}(通过|合格|系统密钥|密钥|key|token)', '检测到疑似提示词注入：诱导系统输出指定审核结果或敏感信息'),
+            ('xss', r'<\s*script\b|javascript:|onerror\s*=|onload\s*=|alert\s*\(', '检测到疑似 XSS 脚本内容'),
+            ('sql_injection', r'\b(drop|delete|truncate|insert|update)\s+(table|from|into|users?)\b|--\s*$|;\s*--', '检测到疑似 SQL 注入或破坏性 SQL 片段'),
+            ('sql_injection', r'\bunion\s+select\b|\bor\s+1\s*=\s*1\b', '检测到疑似 SQL 注入条件')
+        ]
+
+        for issue_type, pattern, message in security_rules:
+            if self._regex_search(pattern, content, ignore_case=True):
+                issues.append({
+                    'type': issue_type,
+                    'severity': 'high',
+                    'message': message
+                })
+
+        return issues
+
+    def _check_public_fabrication_issues(self, df):
+        issues = []
+
+        if len(df) < 5 or len(df.columns) < 2:
+            return issues
+
+        id_like_keywords = ['id', '编号', '序号', 'student_id', 'respondent_id', 'user_id', 'device_id']
+        business_columns = [
+            col for col in df.columns
+            if not any(keyword in str(col).lower() for keyword in id_like_keywords)
+        ]
+
+        if len(business_columns) >= 2:
+            duplicate_without_id = int(df[business_columns].duplicated().sum())
+            duplicate_without_id_ratio = duplicate_without_id / max(1, len(df))
+
+            if duplicate_without_id_ratio > 0.6:
+                issues.append({
+                    'type': 'fabricated_repeated_pattern',
+                    'severity': 'high',
+                    'message': f'非编号字段高度重复，疑似模板化或伪造数据，占比约 {round(duplicate_without_id_ratio * 100, 1)}%'
+                })
+            elif duplicate_without_id_ratio > 0.3:
+                issues.append({
+                    'type': 'fabricated_repeated_pattern',
+                    'severity': 'medium',
+                    'message': f'非编号字段重复比例较高，占比约 {round(duplicate_without_id_ratio * 100, 1)}%'
+                })
+
+        constant_columns = []
+        for col in business_columns:
+            series = df[col].dropna().astype(str)
+            if len(series) >= 5:
+                top_ratio = series.value_counts(normalize=True).iloc[0]
+                if top_ratio > 0.9:
+                    constant_columns.append(str(col))
+
+        if len(constant_columns) >= 2:
+            issues.append({
+                'type': 'low_variance_columns',
+                'severity': 'high',
+                'message': f'多个业务字段取值几乎完全一致，疑似分布异常：{", ".join(constant_columns[:5])}'
+            })
+
+        return issues
+
+    def _check_public_numeric_anomalies(self, df):
+        issues = []
+
+        numeric_df = df.apply(pd.to_numeric, errors='ignore')
+        numeric_columns = numeric_df.select_dtypes(include=[np.number]).columns
+
+        for col in numeric_columns:
+            series = numeric_df[col].dropna()
+            if series.empty:
+                continue
+
+            col_name = str(col).lower()
+            min_value = float(series.min())
+            max_value = float(series.max())
+
+            if any(key in col_name for key in ['humidity', '湿度']) and (min_value < 0 or max_value > 100):
+                issues.append({
+                    'type': 'numeric_physical_range',
+                    'severity': 'high',
+                    'message': f'字段 {col} 超出合理湿度范围 0-100'
+                })
+
+            if any(key in col_name for key in ['temperature', 'temp', '温度']) and (min_value < -80 or max_value > 80):
+                issues.append({
+                    'type': 'numeric_physical_range',
+                    'severity': 'high',
+                    'message': f'字段 {col} 存在不合理温度值'
+                })
+
+            if any(key in col_name for key in ['co2', '二氧化碳']) and (min_value < 0 or max_value > 10000):
+                issues.append({
+                    'type': 'numeric_physical_range',
+                    'severity': 'high',
+                    'message': f'字段 {col} 存在不合理 CO2 数值'
+                })
+
+            if len(series) >= 4:
+                q1 = series.quantile(0.25)
+                q3 = series.quantile(0.75)
+                iqr = q3 - q1
+                if iqr > 0:
+                    outlier_count = int(((series < q1 - 1.5 * iqr) | (series > q3 + 1.5 * iqr)).sum())
+                    if outlier_count / len(series) > 0.2:
+                        issues.append({
+                            'type': 'numeric_outliers',
+                            'severity': 'medium',
+                            'message': f'字段 {col} 异常值比例较高，约 {round(outlier_count / len(series) * 100, 1)}%'
+                        })
+
+        return issues
+
+    def _check_public_text_compliance_issues(self, content, data_format):
+        issues = []
+
+        compliance_rules = [
+            (r'(伪造|编造|代填|随便填|批量生成|模拟生成)', '文本包含疑似伪造、代填或批量生成数据表述'),
+            (r'(不要记录来源|隐藏真实来源|来源保密|无法提供来源|来源不明)', '文本包含来源不明或规避来源记录的风险表述'),
+            (r'(绕过审核|规避审核|无条件通过|直接通过|跳过审核)', '文本包含审核规避或干扰审核流程的风险表述')
+        ]
+
+        for pattern, message in compliance_rules:
+            if self._regex_search(pattern, content, ignore_case=True):
+                issues.append({
+                    'type': 'text_compliance_risk',
+                    'severity': 'high',
+                    'message': message
+                })
+
+        return issues
+
+    def _regex_search(self, pattern, text, ignore_case=False):
+        import re
+        flags = re.IGNORECASE if ignore_case else 0
+        return re.search(pattern, text or '', flags) is not None
+
+    def _deduplicate_issue_details(self, issues):
+        seen = set()
+        result = []
+        for item in issues:
+            key = (item.get('type'), item.get('message'))
+            if key not in seen:
+                seen.add(key)
+                result.append(item)
+        return result
+
+    def _build_public_check_summary(self, data_format, rows, columns, risk_level, issue_details):
+        if not issue_details:
+            return f'已解析为 {data_format.upper()} 数据，共 {rows} 行、{columns} 列，未发现明显基础风险。'
+
+        risk_label = {
+            'high': '高风险',
+            'medium': '中风险',
+            'low': '低风险',
+            'none': '未发现明显风险'
+        }.get(risk_level, risk_level)
+
+        return f'已解析为 {data_format.upper()} 数据，共 {rows} 行、{columns} 列，检测到 {len(issue_details)} 项问题，综合判断为{risk_label}。'
 
 # 初始化分析器
 analyzer = DataAnalyzer()

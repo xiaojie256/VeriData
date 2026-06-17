@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory } from "vue-router";
-import store from "../store";
+import store, { getStoredToken, clearAuthStorage } from "../store";
 
 const getHomePath = (role) => {
   if (role === "admin") return "/admin/dashboard";
@@ -189,8 +189,8 @@ const router = createRouter({
 
 // 路由守卫
 router.beforeEach((to, from, next) => {
-  // 从localStorage实时获取token和用户信息（避免与store状态不同步）
-  const token = localStorage.getItem("token");
+  // 从 localStorage 实时获取有效 token，避免 "undefined" / "null" 这类脏值被当成已登录
+  const token = getStoredToken();
   const isLoggedIn = !!token;
 
   // 直接从localStorage获取用户角色，不依赖store getter
@@ -204,21 +204,31 @@ router.beforeEach((to, from, next) => {
   } catch (e) {
     console.error("解析用户角色失败:", e);
     // 解析失败时清除无效数据
-    localStorage.removeItem("user");
-    localStorage.removeItem("token");
+    clearAuthStorage();
+    store.commit("CLEAR_AUTH");
   }
 
   // 公开页面直接访问
   if (to.meta.public) {
-    if (isLoggedIn && to.path === "/login") {
+    // 已登录用户访问登录页时才跳回首页；如果 token 或用户角色异常，不允许误跳转
+    if (isLoggedIn && userRole && to.path === "/login") {
       return next(getHomePath(userRole));
     }
+
+    if (to.path === "/login" && (!isLoggedIn || !userRole)) {
+      clearAuthStorage();
+    }
+
     return next();
   }
 
   // 需要登录
   if (!isLoggedIn) {
-    return next("/login");
+    clearAuthStorage();
+    return next({
+      path: "/login",
+      replace: true,
+    });
   }
 
   // 角色权限检查
