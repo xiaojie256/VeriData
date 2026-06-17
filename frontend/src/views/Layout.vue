@@ -48,7 +48,7 @@
           <el-menu-item index="/admin/dashboard">管理仪表盘</el-menu-item>
           <el-menu-item index="/admin/users">用户管理</el-menu-item>
           <el-menu-item index="/admin/data">数据管理</el-menu-item>
-          <el-menu-item index="/admin/ai-settings">AI审查配置</el-menu-item>
+          <el-menu-item index="/admin/ai-config">AI审查配置</el-menu-item>
           <el-menu-item index="/admin/logs">系统日志</el-menu-item>
         </el-sub-menu>
       </el-menu>

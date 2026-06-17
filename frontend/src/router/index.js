@@ -146,6 +146,17 @@ const routes = [
         },
       },
       {
+        path: "admin/ai-config",
+        name: "AdminAiConfig",
+        component: () => import("../views/admin/AiConfig.vue"),
+        meta: {
+          title: "AI审查配置",
+          icon: "Setting",
+          roles: ["admin"],
+          hidden: true,
+        },
+      },
+      {
         path: "admin/logs",
         name: "AdminLogs",
         component: () => import("../views/admin/Logs.vue"),
