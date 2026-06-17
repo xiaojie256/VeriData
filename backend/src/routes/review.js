@@ -527,6 +527,118 @@ router.post(
   }
 );
 
+// 管理员终审：用于"数据审核 / 待审核"工作台关闭 pending admin 审核记录
+router.post(
+  '/:id/admin',
+  authenticate,
+  authorize('admin'),
+  auditLog('review', 'review'),
+  async (req, res) => {
+    const connection = await pool.getConnection();
+
+    try {
+      await connection.beginTransaction();
+
+      const reviewId = Number.parseInt(req.params.id, 10);
+      const { decision, comments = '' } = req.body;
+
+      if (!Number.isInteger(reviewId) || reviewId <= 0) {
+        await connection.rollback();
+        return res.status(400).json({ error: '无效的审核记录ID' });
+      }
+
+      if (!['approved', 'rejected'].includes(decision)) {
+        await connection.rollback();
+        return res.status(400).json({ error: '管理员终审结果只能是通过或拒绝' });
+      }
+
+      const [reviews] = await connection.execute(
+        `SELECT r.id AS review_id,
+                r.data_id,
+                r.review_type,
+                r.status AS review_record_status,
+                d.title,
+                d.submitter_id,
+                d.review_status
+         FROM review_records r
+         JOIN data_submissions d ON r.data_id = d.id
+         WHERE r.id = ?
+           AND r.review_type = 'admin'
+           AND r.status = 'pending'
+           AND d.deleted_at IS NULL
+         FOR UPDATE`,
+        [reviewId]
+      );
+
+      if (reviews.length === 0) {
+        await connection.rollback();
+        return res.status(404).json({ error: '未找到待处理的管理员终审记录' });
+      }
+
+      const review = reviews[0];
+
+      if (review.review_status !== 'expert_approved') {
+        await connection.rollback();
+        return res.status(400).json({
+          error: `当前数据状态为 ${review.review_status}，不能进行管理员终审`
+        });
+      }
+
+      const finalStatus = decision === 'approved' ? 'final_approved' : 'final_rejected';
+      const progress = decision === 'approved' ? 100 : 0;
+      const reviewRecordStatus = decision === 'approved' ? 'approved' : 'rejected';
+
+      await connection.execute(
+        `UPDATE review_records
+         SET reviewer_id = ?,
+             status = ?,
+             comments = ?,
+             completed_at = NOW()
+         WHERE id = ?`,
+        [Number(req.user.id), reviewRecordStatus, comments, reviewId]
+      );
+
+      await connection.execute(
+        `UPDATE data_submissions
+         SET review_status = ?,
+             review_progress = ?,
+             completed_at = NOW()
+         WHERE id = ?`,
+        [finalStatus, progress, review.data_id]
+      );
+
+      await connection.execute(
+        `INSERT INTO notifications (user_id, type, title, content, related_type, related_id)
+         VALUES (?, 'review', ?, ?, 'data', ?)`,
+        [
+          review.submitter_id,
+          decision === 'approved' ? '数据终审通过' : '数据终审未通过',
+          decision === 'approved'
+            ? `您的数据《${review.title}》已通过管理员终审。`
+            : `您的数据《${review.title}》未通过管理员终审，请根据意见修改后重新提交。`,
+          review.data_id
+        ]
+      );
+
+      await connection.commit();
+
+      res.json({
+        message: decision === 'approved' ? '管理员终审通过' : '管理员终审拒绝',
+        review_status: finalStatus,
+        review_progress: progress
+      });
+    } catch (error) {
+      await connection.rollback();
+      logger.error('管理员终审失败:', error);
+      res.status(500).json({
+        error: '管理员终审失败'
+      });
+    } finally {
+      connection.release();
+    }
+  }
+);
+
 // 获取AI辅助分析结果
 router.get(
   "/:id/ai-analysis",

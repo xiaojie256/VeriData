@@ -143,7 +143,7 @@
             <el-radio-group v-model="reviewForm.status">
               <el-radio-button label="approved">通过</el-radio-button>
               <el-radio-button label="rejected">拒绝</el-radio-button>
-              <el-radio-button label="revision_required">需修改</el-radio-button>
+              <el-radio-button v-if="currentReviewType !== 'admin'" label="revision_required">需修改</el-radio-button>
             </el-radio-group>
           </el-form-item>
           
@@ -181,8 +181,19 @@ const currentReview = ref(null)
 const aiAnalysis = ref(null)
 
 const userRole = computed(() => store.getters.userRole)
-const reviewType = computed(() => userRole.value === 'teacher' ? 'teacher' : 'expert')
-const reviewDialogTitle = computed(() => reviewType.value === 'teacher' ? '导师一审' : '专家盲审')
+
+const currentReviewType = computed(() => {
+  return currentReview.value?.review_type || (userRole.value === 'teacher' ? 'teacher' : 'expert')
+})
+
+const reviewDialogTitle = computed(() => {
+  const titleMap = {
+    teacher: '导师一审',
+    expert: '专家盲审',
+    admin: '管理员终审'
+  }
+  return titleMap[currentReviewType.value] || '数据审核'
+})
 
 const pagination = ref({
   page: 1,
@@ -218,11 +229,13 @@ const getScoreType = (score) => {
 const fetchData = async () => {
   loading.value = true
   try {
-    const response = await api.get(
-      `/review/pending?page=${pagination.value.page}&limit=${pagination.value.limit}&review_type=${reviewType.value}`,
-    )
+    let url = `/review/pending?page=${pagination.value.page}&limit=${pagination.value.limit}`
+    if (userRole.value !== 'admin') {
+      url += `&review_type=${userRole.value === 'teacher' ? 'teacher' : 'expert'}`
+    }
+    const response = await api.get(url)
     reviewList.value = response.reviews || []
-    pagination.value.total = response.pagination?.total || reviewList.value.length
+    pagination.value.total = response.pagination?.total ?? reviewList.value.length
   } catch (error) {
     ElMessage.error(error?.error || '获取待审核列表失败')
   } finally {
@@ -260,11 +273,20 @@ const viewDetail = (row) => {
 
 const submitReview = async () => {
   try {
-    await api.post(`/review/${currentReview.value.review_id}/${reviewType.value}`, {
-      ...reviewForm.value,
-      ai_analysis: aiAnalysis.value ? JSON.stringify(aiAnalysis.value) : null
-    })
-    
+    const type = currentReview.value?.review_type || currentReviewType.value
+
+    if (type === 'admin') {
+      await api.post(`/review/${currentReview.value.review_id}/admin`, {
+        decision: reviewForm.value.status === 'approved' ? 'approved' : 'rejected',
+        comments: reviewForm.value.comments
+      })
+    } else {
+      await api.post(`/review/${currentReview.value.review_id}/${type}`, {
+        ...reviewForm.value,
+        ai_analysis: aiAnalysis.value ? JSON.stringify(aiAnalysis.value) : null
+      })
+    }
+
     ElMessage.success('审核提交成功')
     reviewDialogVisible.value = false
     fetchData()

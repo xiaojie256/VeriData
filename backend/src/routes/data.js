@@ -653,14 +653,18 @@ router.get('/:id/download', optionalAuth, auditLog('data', 'download'), async (r
 router.post(
   '/:id/submit',
   authenticate,
-  authorize('student', 'teacher', 'admin'),
+  authorize('student', 'teacher', 'admin', 'civilian'),
   auditLog('data', 'create'),
   async (req, res) => {
     const connection = await pool.getConnection();
 
     try {
       const dataId = Number.parseInt(req.params.id, 10);
-      const teacherId = Number.parseInt(req.body.teacher_id, 10);
+      const teacherId =
+        req.body.teacher_id === undefined || req.body.teacher_id === null || req.body.teacher_id === ''
+          ? null
+          : Number.parseInt(req.body.teacher_id, 10);
+
       const liabilityAccepted = Boolean(req.body.liability_accepted);
 
       if (!Number.isFinite(dataId) || dataId <= 0) {
@@ -693,8 +697,8 @@ router.post(
         return res.status(403).json({ error: '无权操作此数据' });
       }
 
-      // 检查 AI 检测状态，学生角色必须通过 AI 检测才能提交审核
-      if (req.user.role === 'student' && data.ai_check_status !== 'completed') {
+      // 检查 AI 检测状态，学生和普通账号必须通过 AI 检测才能提交审核
+      if (['student', 'civilian'].includes(req.user.role) && data.ai_check_status !== 'completed') {
         await connection.rollback();
         return res.status(400).json({
           error: 'AI检测未完成或检测失败，暂不能提交审核'
@@ -782,6 +786,46 @@ router.post(
           message: '数据已提交导师审核',
           review_status: 'teacher_reviewing',
           review_progress: 10
+        });
+      }
+
+      // 普通账号：无导师，直接进入专家审核队列
+      if (req.user.role === 'civilian') {
+        await connection.execute(
+          `UPDATE data_submissions
+           SET review_status = 'expert_reviewing',
+               submitted_at = NOW(),
+               is_liability_accepted = 1,
+               review_progress = 40
+           WHERE id = ?`,
+          [dataId]
+        );
+
+        await connection.execute(
+          `INSERT INTO review_records
+           (data_id, reviewer_id, review_type, status, is_blind_review)
+           VALUES (?, NULL, 'expert', 'pending', 1)`,
+          [dataId]
+        );
+
+        await connection.execute(
+          `INSERT INTO notifications (user_id, type, title, content, related_type, related_id)
+           SELECT id, 'review', '新的专家审核任务', ?, 'data', ?
+           FROM users
+           WHERE role = 'expert'
+             AND status = 'active'
+             AND deleted_at IS NULL`,
+          [
+            `普通账号 ${req.user.real_name || req.user.username} 提交了数据《${data.title}》，请进行专家审核。`,
+            dataId
+          ]
+        );
+
+        await connection.commit();
+        return res.json({
+          message: '数据已提交专家审核',
+          review_status: 'expert_reviewing',
+          review_progress: 40
         });
       }
 

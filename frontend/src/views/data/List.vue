@@ -182,7 +182,7 @@
 
     <el-dialog v-model="submitDialogVisible" title="提交审核" width="500px">
       <el-form :model="submitForm" label-width="100px">
-        <el-form-item label="选择导师">
+        <el-form-item v-if="needsTeacherReview" label="选择导师" required>
           <el-select v-model="submitForm.teacher_id" placeholder="请选择导师" class="w-full">
             <el-option
               v-for="teacher in teachers"
@@ -192,6 +192,15 @@
             />
           </el-select>
         </el-form-item>
+
+        <el-alert
+          v-else
+          title="普通账号无需选择导师，提交后将直接进入专家审核队列。"
+          type="info"
+          show-icon
+          :closable="false"
+          style="margin-bottom: 16px;"
+        />
 
         <el-form-item>
           <el-checkbox v-model="submitForm.liability_accepted">
@@ -297,11 +306,13 @@ const currentUserRole = computed(() => {
 
 const canShowSubmit = (row) => {
   return !isViewingStudent.value &&
-    currentUserRole.value === 'student' &&
+    ['student', 'civilian'].includes(currentUserRole.value) &&
     canSubmit(row.review_status)
 }
 
 const canDelete = (status) => ['draft', 'final_rejected'].includes(status)
+
+const needsTeacherReview = computed(() => currentUserRole.value === 'student')
 
 const fetchData = async ({ silent = false } = {}) => {
   if (!silent) {
@@ -420,33 +431,39 @@ const submitReview = async (row) => {
     console.error(e)
   }
 
-  // 2. 非学生角色，禁止从"我的数据"走学生提交导师审核流程
-  if (userRole !== 'student') {
-    ElMessage.warning('当前角色不支持从"我的数据"提交导师审核，请使用对应审核/管理入口');
+  // 2. 非学生/普通账号角色，禁止从"我的数据"走提交审核流程
+  if (!['student', 'civilian'].includes(userRole)) {
+    ElMessage.warning('当前角色不支持从"我的数据"提交审核，请联系管理员处理');
     return;
   }
 
   // 3. 学生角色：获取导师列表
-  try {
-    const response = await api.get('/users/my-tutor')
-    if (response.teachers) {
-      teachers.value = [response.teachers]
-      submitForm.teacher_id = response.teachers.id
-    } else {
+  if (userRole === 'student') {
+    try {
+      const response = await api.get('/users/my-tutor')
+      if (response.teachers) {
+        teachers.value = [response.teachers]
+        submitForm.teacher_id = response.teachers.id
+      } else {
+        teachers.value = []
+        ElMessage.warning('您尚未绑定导师，请先前往"我的导师"页面完成绑定后再提交')
+        return
+      }
+    } catch (error) {
+      // 获取导师失败时仍打开对话框，允许用户稍后重试
       teachers.value = []
-      ElMessage.warning('您尚未绑定导师，请先前往"我的导师"页面完成绑定后再提交')
-      return
+      ElMessage.warning('获取导师信息失败，请稍后重试')
     }
-  } catch (error) {
-    // 获取导师失败时仍打开对话框，允许用户稍后重试
+  } else {
+    // 普通账号不需要导师
     teachers.value = []
-    ElMessage.warning('获取导师信息失败，请稍后重试')
+    submitForm.teacher_id = null
   }
   submitDialogVisible.value = true
 }
 
 const confirmSubmit = async () => {
-  if (!submitForm.teacher_id) {
+  if (needsTeacherReview.value && !submitForm.teacher_id) {
     ElMessage.warning('请选择导师')
     return
   }
@@ -454,13 +471,22 @@ const confirmSubmit = async () => {
     ElMessage.warning('请接受责任声明')
     return
   }
-  
+
   try {
-    await api.post(`/data/${currentData.value.id}/submit`, {
-      teacher_id: submitForm.teacher_id,
+    const payload = {
       liability_accepted: submitForm.liability_accepted
-    })
-    ElMessage.success('提交审核成功')
+    }
+
+    if (needsTeacherReview.value) {
+      payload.teacher_id = submitForm.teacher_id
+    }
+
+    await api.post(`/data/${currentData.value.id}/submit`, payload)
+    ElMessage.success(
+      needsTeacherReview.value
+        ? '提交审核成功，已进入导师一审'
+        : '提交审核成功，已进入专家审核'
+    )
     submitDialogVisible.value = false
     fetchData()
   } catch (error) {

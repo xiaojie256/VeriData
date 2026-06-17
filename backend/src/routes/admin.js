@@ -423,26 +423,33 @@ router.post(
   authenticate,
   authorize("admin"),
   async (req, res) => {
+    const connection = await pool.getConnection();
+
     try {
       const dataId = req.params.id;
       const { decision, comments } = req.body; // decision: approved, rejected
 
-      const [dataList] = await pool.execute(
-        "SELECT title, submitter_id, review_status FROM data_submissions WHERE id = ? AND deleted_at IS NULL",
+      await connection.beginTransaction();
+
+      const [dataList] = await connection.execute(
+        "SELECT title, submitter_id, review_status FROM data_submissions WHERE id = ? AND deleted_at IS NULL FOR UPDATE",
         [dataId],
       );
 
       if (dataList.length === 0) {
+        await connection.rollback();
         return res.status(404).json({ error: "数据不存在" });
       }
 
       if (dataList[0].review_status !== "expert_approved") {
+        await connection.rollback();
         return res.status(400).json({
           error: `当前数据状态为 ${dataList[0].review_status}，只有待终审数据允许管理员终审`,
         });
       }
 
       if (!["approved", "rejected"].includes(decision)) {
+        await connection.rollback();
         return res.status(400).json({
           error: "无效的审核结果",
         });
@@ -452,22 +459,53 @@ router.post(
         decision === "approved" ? "final_approved" : "final_rejected";
       const progress = decision === "approved" ? 100 : 0;
 
-      await pool.execute(
+      await connection.execute(
         "UPDATE data_submissions SET review_status = ?, review_progress = ?, completed_at = NOW() WHERE id = ?",
         [newStatus, progress, dataId],
       );
 
-      // 创建审核记录
-      await pool.execute(
-        `INSERT INTO review_records (data_id, reviewer_id, review_type, status, comments, completed_at)
-       VALUES (?, ?, 'admin', ?, ?, NOW())`,
-        [dataId, Number(req.user.id), decision, comments],
+      // 优先关闭已有 pending admin 审核记录，避免重复
+      const [pendingAdminReviews] = await connection.execute(
+        `SELECT id
+         FROM review_records
+         WHERE data_id = ?
+           AND review_type = 'admin'
+           AND status = 'pending'
+         ORDER BY created_at DESC
+         LIMIT 1
+         FOR UPDATE`,
+        [dataId]
       );
 
+      const reviewRecordStatus = decision === "approved" ? "approved" : "rejected";
+
+      if (pendingAdminReviews.length > 0) {
+        await connection.execute(
+          `UPDATE review_records
+           SET reviewer_id = ?,
+               status = ?,
+               comments = ?,
+               completed_at = NOW()
+           WHERE id = ?`,
+          [
+            Number(req.user.id),
+            reviewRecordStatus,
+            comments,
+            pendingAdminReviews[0].id
+          ]
+        );
+      } else {
+        await connection.execute(
+          `INSERT INTO review_records (data_id, reviewer_id, review_type, status, comments, completed_at)
+           VALUES (?, ?, 'admin', ?, ?, NOW())`,
+          [dataId, Number(req.user.id), reviewRecordStatus, comments],
+        );
+      }
+
       // 通知提交者
-      await pool.execute(
+      await connection.execute(
         `INSERT INTO notifications (user_id, type, title, content, related_type, related_id)
-       VALUES (?, 'review', ?, ?, 'data', ?)`,
+         VALUES (?, 'review', ?, ?, 'data', ?)`,
         [
           dataList[0].submitter_id,
           decision === "approved" ? "数据审核通过" : "数据审核未通过",
@@ -477,12 +515,17 @@ router.post(
         ],
       );
 
+      await connection.commit();
+
       logger.info(`管理员终审: data_id=${dataId}, decision=${decision}`);
 
       res.json({ message: decision === "approved" ? "审核通过" : "已拒绝" });
     } catch (error) {
+      await connection.rollback();
       logger.error("管理员审核失败:", error);
       res.status(500).json({ error: "审核失败" });
+    } finally {
+      connection.release();
     }
   },
 );

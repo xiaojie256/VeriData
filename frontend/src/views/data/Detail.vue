@@ -381,7 +381,7 @@
           title="当前账号无需导师绑定"
         >
           <template #default>
-            管理员/教师账号提交的数据将跳过导师一审，直接进入管理员最终审核队列。可见性只控制谁能查看数据，不控制是否需要审核。
+            普通账号提交后将直接进入专家审核队列；管理员/教师账号提交的数据将跳过导师一审，直接进入管理员最终审核队列。
           </template>
         </el-alert>
       </template>
@@ -766,8 +766,8 @@ const downloadData = () => {
 }
 
 const showSubmitDialog = async () => {
-  // 检查 AI 检测状态，学生角色必须通过 AI 检测才能提交
-  if (data.value && currentUserRole.value === 'student' && data.value.ai_check_status !== 'completed') {
+  // 检查 AI 检测状态，学生和普通账号必须通过 AI 检测才能提交
+  if (data.value && ['student', 'civilian'].includes(currentUserRole.value) && data.value.ai_check_status !== 'completed') {
     ElMessage.warning('AI检测未通过或尚未完成，暂不能提交审核。请先完成AI检测。')
     return
   }
@@ -820,7 +820,9 @@ const submitReview = async () => {
     ElMessage.success(
       needsTeacherReview.value
         ? '提交审核成功，已进入AI检测与导师一审环节'
-        : '提交审核成功，已进入管理员最终审核环节'
+        : currentUserRole.value === 'civilian'
+          ? '提交审核成功，已进入专家审核环节'
+          : '提交审核成功，已进入管理员最终审核环节'
     )
 
     submitDialogVisible.value = false
