@@ -24,6 +24,40 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 
+UPLOAD_ROOT = os.environ.get('UPLOAD_ROOT', '/app/uploads')
+
+def normalize_shared_upload_path(file_path):
+    if not file_path:
+        return file_path
+
+    normalized = os.path.normpath(file_path)
+
+    if os.path.exists(normalized):
+        return normalized
+
+    marker = f"{os.sep}uploads{os.sep}"
+
+    if marker in normalized:
+        relative_path = normalized.split(marker, 1)[1]
+        candidate = os.path.join(UPLOAD_ROOT, relative_path)
+
+        if os.path.exists(candidate):
+            return candidate
+
+    # 兼容 Windows 路径中包含 uploads 的情况
+    lower_path = normalized.replace('\\', '/').lower()
+    upload_index = lower_path.find('/uploads/')
+
+    if upload_index >= 0:
+      relative_path = normalized.replace('\\', '/')[upload_index + len('/uploads/'):]
+      candidate = os.path.join(UPLOAD_ROOT, relative_path)
+
+      if os.path.exists(candidate):
+          return candidate
+
+    return normalized
+
+
 def make_json_safe(value):
     """递归转换 Pandas / NumPy 类型，确保 Flask jsonify 可以正常序列化"""
     if isinstance(value, dict):
@@ -483,7 +517,7 @@ def analyze():
     """分析数据文件"""
     try:
         data = request.json
-        file_path = data.get('file_path')
+        file_path = normalize_shared_upload_path(data.get('file_path'))
         file_hash = data.get('file_hash')
         llm_config = data.get('llm_config') or {}
 

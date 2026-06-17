@@ -1,112 +1,255 @@
 const express = require('express');
 const axios = require('axios');
 const fs = require('fs');
+const path = require('path');
 const pool = require('../utils/database');
 const logger = require('../utils/logger');
 const { authenticate, authorize } = require('../middleware/auth');
+const { getAiConfig } = require('../utils/aiConfig');
 
 const router = express.Router();
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL || 'http://localhost:5000';
 
-// 触发AI检测
-router.post('/analyze/:dataId', authenticate, async (req, res) => {
+const AI_SUPPORTED_EXTENSIONS = new Set(['.csv', '.xlsx', '.xls', '.json', '.txt'])
+
+const buildAiResult = (payload) => {
+  return JSON.stringify({
+    timestamp: new Date().toISOString(),
+    ...payload
+  })
+}
+
+const markAiFailed = async (dataId, reason, extra = {}) => {
+  await pool.execute(
+    `UPDATE data_submissions
+     SET ai_check_status = 'failed',
+         ai_check_result = ?,
+         ai_check_score = NULL,
+         ai_anomaly_detected = 0
+     WHERE id = ?`,
+    [
+      buildAiResult({
+        error: reason,
+        ...extra
+      }),
+      dataId
+    ]
+  )
+}
+
+const markAiSkipped = async (dataId, reason, extra = {}) => {
+  await pool.execute(
+    `UPDATE data_submissions
+     SET ai_check_status = 'completed',
+         ai_check_result = ?,
+         ai_check_score = NULL,
+         ai_anomaly_detected = 0
+     WHERE id = ?`,
+    [
+      buildAiResult({
+        skipped: true,
+        reason,
+        ...extra
+      }),
+      dataId
+    ]
+  )
+}
+
+const normalizeAiResponse = (result) => {
+  return buildAiResult({
+    summary: result.summary || '',
+    risk_level: result.risk_level || 'unknown',
+    details: result.details || {},
+    suggestions: result.suggestions || []
+  })
+}
+
+const runAiAnalysis = async (dataId, data, llmConfig) => {
   try {
-    const dataId = req.params.dataId;
+    const timeoutMs = Math.max(
+      60000,
+      Number(llmConfig?.timeout_ms || 30000) + 10000
+    )
 
-    // 验证数据所有权
-    const [dataList] = await pool.execute(
-      'SELECT id, file_path, file_hash, ai_check_status, submitter_id FROM data_submissions WHERE id = ? AND deleted_at IS NULL',
-      [dataId]
-    );
-
-    if (dataList.length === 0) {
-      return res.status(404).json({ error: '数据不存在' });
-    }
-
-    const data = dataList[0];
-
-    // 检查权限
-    if (data.submitter_id !== req.user.id && !['admin', 'teacher', 'expert'].includes(req.user.role)) {
-      return res.status(403).json({ error: '无权分析此数据' });
-    }
-
-    // 检查是否正在分析中
-    if (data.ai_check_status === 'running') {
-      return res.status(400).json({ error: 'AI检测正在进行中' });
-    }
-
-    // 强制内核将写缓存同步到物理磁盘，规避 Docker 挂载下的异步 I/O 延迟死锁
-    try {
-      const fd = fs.openSync(data.file_path, 'r+');
-      fs.fsyncSync(fd);
-      fs.closeSync(fd);
-    } catch (ioErr) {
-      logger.error(`磁盘同步失败: ${ioErr.message}`);
-    }
-
-    // 更新状态为分析中
-    await pool.execute(
-      'UPDATE data_submissions SET ai_check_status = ? WHERE id = ?',
-      ['running', dataId]
-    );
-
-    // 异步调用AI服务
-    const llmConfig = await getRuntimeAiReviewConfig();
-
-    axios.post(
+    const response = await axios.post(
       `${AI_SERVICE_URL}/analyze`,
       {
         data_id: dataId,
         file_path: data.file_path,
         file_hash: data.file_hash,
-        llm_config: llmConfig,
+        llm_config: llmConfig
       },
       {
-        timeout: 120000,
-      },
-    ).then(async (response) => {
-      const result = response.data;
-      
-      await pool.execute(
-        `UPDATE data_submissions 
-         SET ai_check_status = 'completed', 
-             ai_check_result = ?, 
-             ai_check_score = ?, 
-             ai_anomaly_detected = ?
-         WHERE id = ?`,
-        [
-          JSON.stringify(result.details),
-          result.score,
-          result.has_anomaly ? 1 : 0,
-          dataId
-        ]
-      );
-      
-      logger.info(`AI检测完成: data_id=${dataId}, score=${result.score}`);
-    }).catch(async (error) => {
-      const errorMessage = error.response?.data?.error || error.message || 'AI检测失败'
+        timeout: timeoutMs
+      }
+    )
 
-      await pool.execute(
-        `UPDATE data_submissions
-         SET ai_check_status = ?,
-             ai_check_result = ?,
-             ai_check_score = NULL,
-             ai_anomaly_detected = 1
-         WHERE id = ?`,
-        [
-          'failed',
-          JSON.stringify({ error: errorMessage }),
-          dataId
-        ]
-      );
+    const result = response.data || {}
 
-      logger.error(`AI检测失败: data_id=${dataId}, error=${errorMessage}`);
-    });
+    await pool.execute(
+      `UPDATE data_submissions
+       SET ai_check_status = 'completed',
+           ai_check_score = ?,
+           ai_check_result = ?,
+           ai_anomaly_detected = ?
+       WHERE id = ?`,
+      [
+        result.score ?? null,
+        normalizeAiResponse(result),
+        result.anomaly_detected || result.has_anomaly ? 1 : 0,
+        dataId
+      ]
+    )
 
-    res.json({ message: 'AI检测已启动' });
+    logger.info('AI检测完成', {
+      dataId,
+      score: result.score,
+      anomaly_detected: result.anomaly_detected || result.has_anomaly
+    })
   } catch (error) {
-    logger.error('启动AI检测失败:', error);
-    res.status(500).json({ error: '启动AI检测失败' });
+    const reason =
+      error.response?.data?.error ||
+      error.message ||
+      'AI服务调用失败'
+
+    logger.error('AI检测执行失败:', {
+      dataId,
+      reason,
+      status: error.response?.status
+    })
+
+    await markAiFailed(dataId, reason, {
+      status: error.response?.status || null
+    })
+  }
+}
+
+// 触发AI检测
+router.post('/analyze/:dataId', authenticate, async (req, res) => {
+  const dataId = Number(req.params.dataId)
+
+  if (!Number.isSafeInteger(dataId) || dataId <= 0) {
+    return res.status(400).json({
+      error: '无效的数据ID'
+    })
+  }
+
+  try {
+    const [dataList] = await pool.execute(
+      `SELECT id, user_id, title, file_path, file_hash, data_format, ai_check_status
+       FROM data_submissions
+       WHERE id = ?`,
+      [dataId]
+    )
+
+    if (dataList.length === 0) {
+      return res.status(404).json({
+        error: '数据不存在'
+      })
+    }
+
+    const data = dataList[0]
+
+    const canAnalyze =
+      data.user_id === req.user.id ||
+      ['admin', 'teacher', 'expert'].includes(req.user.role)
+
+    if (!canAnalyze) {
+      return res.status(403).json({
+        error: '权限不足'
+      })
+    }
+
+    if (data.ai_check_status === 'running') {
+      return res.status(409).json({
+        error: 'AI检测正在进行中，请稍后查看结果'
+      })
+    }
+
+    if (!data.file_path || !fs.existsSync(data.file_path)) {
+      await markAiFailed(dataId, '文件不存在或存储路径不可访问', {
+        file_path: data.file_path || null
+      })
+
+      return res.status(409).json({
+        error: '文件不存在或存储路径不可访问，无法启动AI检测'
+      })
+    }
+
+    const ext = path.extname(data.file_path).toLowerCase()
+
+    if (!AI_SUPPORTED_EXTENSIONS.has(ext)) {
+      await markAiSkipped(dataId, `当前文件类型 ${ext || 'unknown'} 暂不支持自动AI检测`, {
+        supported_extensions: Array.from(AI_SUPPORTED_EXTENSIONS)
+      })
+
+      return res.status(200).json({
+        message: '当前文件类型暂不支持自动AI检测，已跳过',
+        status: 'completed',
+        skipped: true,
+        supported_extensions: Array.from(AI_SUPPORTED_EXTENSIONS)
+      })
+    }
+
+    try {
+      const fd = fs.openSync(data.file_path, 'r')
+      fs.closeSync(fd)
+    } catch (fileError) {
+      await markAiFailed(dataId, '文件无法读取', {
+        file_path: data.file_path,
+        detail: fileError.message
+      })
+
+      return res.status(409).json({
+        error: '文件无法读取，无法启动AI检测'
+      })
+    }
+
+    await pool.execute(
+      `UPDATE data_submissions
+       SET ai_check_status = 'running',
+           ai_check_result = NULL
+       WHERE id = ?`,
+      [dataId]
+    )
+
+    let llmConfig = {
+      enabled: false,
+      disabled_reason: '管理员未启用大模型语义审计'
+    }
+
+    try {
+      llmConfig = await getAiConfig({ includeSecret: true })
+    } catch (configError) {
+      logger.warn('读取AI审查配置失败，将仅使用本地基础检测:', {
+        message: configError.message
+      })
+
+      llmConfig = {
+        enabled: false,
+        disabled_reason: 'AI审查配置读取失败，仅执行本地基础检测'
+      }
+    }
+
+    res.status(202).json({
+      message: 'AI检测已进入队列',
+      status: 'running'
+    })
+
+    setImmediate(() => {
+      runAiAnalysis(dataId, data, llmConfig)
+    })
+  } catch (error) {
+    logger.error('启动AI检测失败:', {
+      dataId,
+      message: error.message,
+      stack: error.stack
+    })
+
+    res.status(500).json({
+      error: '启动AI检测失败，请查看后端日志'
+    })
   }
 });
 

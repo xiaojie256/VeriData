@@ -28,8 +28,9 @@ api.interceptors.response.use(
   (error) => {
     const status = error.response?.status;
     const errorMsg = error.response?.data?.error;
+    const errorCode = error.response?.data?.code;
 
-    // 1. 如果是 401 未登录，或者 403 且后端明确返回账号被封禁
+    // 1. 如果是 401 未登录 / 会话失效 / 异地登录，或者 403 且后端明确返回账号被封禁
     if (status === 401 || (status === 403 && errorMsg === "账号已被封禁")) {
       // 清除本地过期的无用凭证
       localStorage.removeItem("token");
@@ -41,7 +42,12 @@ api.interceptors.response.use(
       if (!isAtLogin) {
         if (status === 403) {
           alert("您的账号已被封禁，请联系管理员！");
+        } else if (errorCode === "SESSION_REPLACED") {
+          alert("您的账号已在其他设备登录，本次会话已失效，请重新登录。");
+        } else if (errorCode === "SESSION_EXPIRED" || errorCode === "SESSION_INVALID") {
+          alert("登录会话已失效，请重新登录。");
         }
+
         // 强制重定向回登录页
         window.location.replace("/login");
 
@@ -136,8 +142,14 @@ export default createStore({
     },
 
     // 登出
-    logout({ commit }) {
-      commit("CLEAR_AUTH");
+    async logout({ commit }) {
+      try {
+        await api.post("/auth/logout");
+      } catch (error) {
+        console.warn("服务端退出登录失败，继续清理本地登录状态:", error);
+      } finally {
+        commit("CLEAR_AUTH");
+      }
     },
 
     // 获取当前用户

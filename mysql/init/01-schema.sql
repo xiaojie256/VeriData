@@ -117,7 +117,7 @@ CREATE TABLE data_submissions (
 CREATE TABLE review_records (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   data_id BIGINT UNSIGNED NOT NULL,
-  reviewer_id BIGINT UNSIGNED NOT NULL,
+  reviewer_id BIGINT UNSIGNED DEFAULT NULL COMMENT '审核人ID；NULL表示未分配到具体审核人的专家/管理员审核池',
   review_type ENUM('teacher', 'expert', 'admin') NOT NULL,
   status ENUM('pending', 'approved', 'rejected', 'revision_required') NOT NULL DEFAULT 'pending',
   

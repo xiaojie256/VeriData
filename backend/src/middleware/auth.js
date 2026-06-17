@@ -1,5 +1,6 @@
 const jwt = require("jsonwebtoken");
 const pool = require("../utils/database");
+const { assertSessionIsCurrent } = require("../utils/session");
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
@@ -18,6 +19,13 @@ const authenticate = async (req, res, next) => {
     }
 
     const decoded = jwt.verify(token, JWT_SECRET);
+
+    await assertSessionIsCurrent(decoded.userId, decoded.sessionId);
+
+    req.auth = {
+      userId: decoded.userId,
+      sessionId: decoded.sessionId
+    };
 
     // 查询用户信息
     const [users] = await pool.execute(
@@ -39,11 +47,27 @@ const authenticate = async (req, res, next) => {
     next();
   } catch (error) {
     if (error.name === "TokenExpiredError") {
-      return res.status(401).json({ error: "令牌已过期" });
+      return res.status(401).json({ error: "令牌已过期", code: "TOKEN_EXPIRED" });
     }
+
     if (error.name === "JsonWebTokenError") {
-      return res.status(401).json({ error: "无效的令牌" });
+      return res.status(401).json({ error: "无效的令牌", code: "TOKEN_INVALID" });
     }
+
+    if (error.code === "SESSION_REPLACED") {
+      return res.status(401).json({
+        error: "账号已在其他设备登录，本次会话已失效",
+        code: "SESSION_REPLACED"
+      });
+    }
+
+    if (error.code === "SESSION_EXPIRED" || error.code === "SESSION_INVALID") {
+      return res.status(401).json({
+        error: error.message || "登录会话已失效，请重新登录",
+        code: error.code
+      });
+    }
+
     return res.status(500).json({ error: "认证失败" });
   }
 };
@@ -81,6 +105,8 @@ const optionalAuth = async (req, res, next) => {
 
     if (token) {
       const decoded = jwt.verify(token, JWT_SECRET);
+      await assertSessionIsCurrent(decoded.userId, decoded.sessionId);
+
       const [users] = await pool.execute(
         "SELECT id, username, role, status FROM users WHERE id = ? AND deleted_at IS NULL",
         [decoded.userId],

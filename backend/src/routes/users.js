@@ -393,6 +393,40 @@ router.post(
   },
 );
 
+// 搜索可指定查看人员：用于受限数据的指定人员选择
+router.get("/search", authenticate, async (req, res) => {
+  try {
+    const keyword = String(req.query.keyword || "").trim();
+
+    if (!keyword) {
+      return res.json({ users: [] });
+    }
+
+    const like = `%${keyword}%`;
+
+    const [users] = await pool.execute(
+      `SELECT id, username, real_name, email, role
+       FROM users
+       WHERE deleted_at IS NULL
+         AND status = 'active'
+         AND id <> ?
+         AND (
+           username LIKE ?
+           OR real_name LIKE ?
+           OR email LIKE ?
+         )
+       ORDER BY real_name IS NULL, real_name, username
+       LIMIT 20`,
+      [req.user.id, like, like, like]
+    );
+
+    res.json({ users });
+  } catch (error) {
+    logger.error("搜索用户失败:", error);
+    res.status(500).json({ error: "搜索用户失败" });
+  }
+});
+
 // 获取用户详情
 router.get("/:id", authenticate, async (req, res) => {
   try {

@@ -42,8 +42,51 @@
               <el-radio-group v-model="form.visibility">
                 <el-radio label="private">私有（仅自己和审核人员可见）</el-radio>
                 <el-radio label="limited">受限（指定人员可见）</el-radio>
-                <el-radio label="public">公开（审核通过后公开）</el-radio>
+                <el-radio label="public">公开（终审通过后所有人可见）</el-radio>
               </el-radio-group>
+
+              <el-alert
+                v-if="form.visibility === 'private'"
+                title="私有数据仅提交者本人、当前审核链人员和管理员可见。"
+                type="info"
+                :closable="false"
+                show-icon
+                class="visibility-tip"
+              />
+
+              <el-alert
+                v-else-if="form.visibility === 'public'"
+                title="公开数据只有终审通过后才会进入公开列表；审核未完成前不会公开。"
+                type="warning"
+                :closable="false"
+                show-icon
+                class="visibility-tip"
+              />
+            </el-form-item>
+
+            <el-form-item
+              v-if="form.visibility === 'limited'"
+              label="指定人员"
+              prop="view_permission"
+            >
+              <el-select
+                v-model="form.view_permission"
+                multiple
+                filterable
+                remote
+                reserve-keyword
+                :remote-method="searchVisibleUsers"
+                :loading="visibleUserLoading"
+                placeholder="输入用户名、姓名或邮箱搜索"
+                class="w-full"
+              >
+                <el-option
+                  v-for="item in visibleUserOptions"
+                  :key="item.id"
+                  :label="`${item.real_name || item.username}（${item.email}，${item.role}）`"
+                  :value="item.id"
+                />
+              </el-select>
             </el-form-item>
             
             <el-form-item label="责任声明">
@@ -79,7 +122,7 @@
             
             <el-form-item>
               <el-button type="primary" :loading="uploading" @click="handleSubmit" :disabled="!liabilityAccepted">
-                上传并提交
+                {{ uploading ? '上传中...' : (isAdmin ? '上传并保存' : '上传数据') }}
               </el-button>
               <el-button @click="$router.push('/data/list')">取消</el-button>
             </el-form-item>
@@ -126,7 +169,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed } from 'vue'
+import { ref, reactive, computed, watch } from 'vue'
 import { useStore } from 'vuex'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -142,6 +185,25 @@ const liabilityAccepted = ref(false)
 const selectedFile = ref(null)
 
 const user = computed(() => store.state.user)
+const userRole = computed(() => user.value?.role || '')
+const isAdmin = computed(() => userRole.value === 'admin')
+
+const AI_SUPPORTED_EXTENSIONS = ['.csv', '.xlsx', '.xls', '.json', '.txt']
+
+const getFileExtension = (fileName = '') => {
+  const index = fileName.lastIndexOf('.')
+  return index >= 0 ? fileName.slice(index).toLowerCase() : ''
+}
+
+const isAiSupportedFile = (file) => {
+  if (!file) return false
+  return AI_SUPPORTED_EXTENSIONS.includes(getFileExtension(file.name || ''))
+}
+
+const shouldAutoStartAi = computed(() => {
+  return !isAdmin.value
+})
+
 const quotaPercent = computed(() => {
   const total = user.value?.quota_total || 1
   const used = user.value?.quota_used || 0
@@ -159,14 +221,62 @@ const form = reactive({
   description: '',
   data_type: 'raw',
   visibility: 'private',
+  view_permission: [],
   file: null
 })
 
 const rules = {
   title: [{ required: true, message: '请输入数据标题', trigger: 'blur' }],
   data_type: [{ required: true, message: '请选择数据类型', trigger: 'change' }],
-  visibility: [{ required: true, message: '请选择可见性', trigger: 'change' }]
+  visibility: [{ required: true, message: '请选择可见性', trigger: 'change' }],
+  view_permission: [
+    {
+      validator: (_rule, value, callback) => {
+        if (form.visibility === 'limited' && (!value || value.length === 0)) {
+          callback(new Error('请选择至少一个指定可见人员'))
+        } else {
+          callback()
+        }
+      },
+      trigger: 'change'
+    }
+  ]
 }
+
+const visibleUserOptions = ref([])
+const visibleUserLoading = ref(false)
+
+const searchVisibleUsers = async (keyword) => {
+  const value = String(keyword || '').trim()
+
+  if (!value) {
+    visibleUserOptions.value = []
+    return
+  }
+
+  visibleUserLoading.value = true
+
+  try {
+    const res = await api.get('/users/search', {
+      params: { keyword: value }
+    })
+
+    visibleUserOptions.value = res.users || []
+  } catch (error) {
+    ElMessage.error(error.error || '搜索用户失败')
+  } finally {
+    visibleUserLoading.value = false
+  }
+}
+
+watch(
+  () => form.visibility,
+  (value) => {
+    if (value !== 'limited') {
+      form.view_permission = []
+    }
+  }
+)
 
 const handleFileChange = (file) => {
   selectedFile.value = file.raw
@@ -197,6 +307,11 @@ const handleSubmit = async () => {
     formData.append('description', form.description)
     formData.append('data_type', form.data_type)
     formData.append('visibility', form.visibility)
+
+    if (form.visibility === 'limited') {
+      formData.append('view_permission', JSON.stringify(form.view_permission))
+    }
+
     formData.append('liability_accepted', liabilityAccepted.value)
     
     const response = await api.post('/data/upload', formData, {
@@ -204,21 +319,40 @@ const handleSubmit = async () => {
         'Content-Type': 'multipart/form-data'
       }
     })
-    
-    ElMessage.success('上传成功，即将进行AI检测')
-    
-    // 触发AI分析
-    try {
-      await api.post(`/ai/analyze/${response.data_id}`)
-    } catch (aiError) {
-      console.error('AI分析启动失败:', aiError)
-      ElMessage.warning(aiError?.error || '数据已上传，但AI检测启动失败，可在详情页重新检测')
+
+    const dataId = response?.data_id || response?.id
+
+    if (!dataId) {
+      throw new Error('上传成功，但后端未返回数据ID')
     }
-    
+
+    const uploadedFile = selectedFile.value
+    const aiSupported = isAiSupportedFile(uploadedFile)
+
+    if (shouldAutoStartAi.value && aiSupported) {
+      try {
+        await api.post(`/ai/analyze/${dataId}`)
+        ElMessage.success('上传成功，AI检测已启动')
+      } catch (aiError) {
+        console.error('AI分析启动失败:', aiError)
+
+        const message =
+          aiError?.error ||
+          aiError?.message ||
+          'AI检测暂未启动，可在详情页手动重试'
+
+        ElMessage.warning(`上传成功；${message}`)
+      }
+    } else if (!aiSupported) {
+      ElMessage.success('上传成功；当前文件类型暂不支持自动AI检测')
+    } else {
+      ElMessage.success('管理员上传已保存；如需AI检测，请在详情页手动启动')
+    }
+
     // 刷新用户额度信息
     await store.dispatch('fetchUser')
-    
-    router.push(`/data/${response.data_id}`)
+
+    router.push(`/data/${dataId}`)
   } catch (error) {
     ElMessage.error(error.error || '上传失败')
   } finally {
@@ -264,5 +398,9 @@ const handleSubmit = async () => {
 
 .guidelines li {
   margin-bottom: 5px;
+}
+
+.visibility-tip {
+  margin-top: 8px;
 }
 </style>

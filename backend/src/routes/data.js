@@ -69,6 +69,92 @@ const consumeQuota = async (userId, dataId, actionType = 'data_submit') => {
   );
 };
 
+const VISIBILITY_VALUES = new Set(['private', 'limited', 'public']);
+
+const normalizeUserIdList = (value) => {
+  if (!value) return [];
+
+  let parsed = value;
+
+  if (typeof value === 'string') {
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      parsed = value.split(',');
+    }
+  }
+
+  if (!Array.isArray(parsed)) return [];
+
+  return [...new Set(
+    parsed
+      .map((item) => Number.parseInt(item, 10))
+      .filter((item) => Number.isSafeInteger(item) && item > 0)
+  )];
+};
+
+const isTeacherOfSubmitter = async (db, teacherId, submitterId) => {
+  const [relations] = await db.execute(
+    `SELECT id
+     FROM teacher_student_relations
+     WHERE teacher_id = ? AND student_id = ? AND status = 'active'
+     LIMIT 1`,
+    [teacherId, submitterId]
+  );
+
+  return relations.length > 0;
+};
+
+const canReviewData = async (db, user, data) => {
+  if (!user || !data) return false;
+
+  if (Number(data.submitter_id) === Number(user.id)) return true;
+  if (user.role === 'admin') return true;
+
+  const [reviews] = await db.execute(
+    `SELECT id
+     FROM review_records
+     WHERE data_id = ?
+       AND status = 'pending'
+       AND (
+         reviewer_id = ?
+         OR (reviewer_id IS NULL AND review_type = 'expert' AND ? = 'expert')
+         OR (reviewer_id IS NULL AND review_type = 'admin' AND ? = 'admin')
+       )
+     LIMIT 1`,
+    [data.id, user.id, user.role, user.role]
+  );
+
+  if (reviews.length > 0) return true;
+
+  if (user.role === 'teacher') {
+    return isTeacherOfSubmitter(db, user.id, data.submitter_id);
+  }
+
+  return false;
+};
+
+const canAccessData = async (db, user, data) => {
+  if (!data) return false;
+
+  if (data.visibility === 'public' && data.review_status === 'final_approved') {
+    return true;
+  }
+
+  if (!user) return false;
+
+  if (await canReviewData(db, user, data)) {
+    return true;
+  }
+
+  if (data.visibility === 'limited' && data.view_permission) {
+    const permissionList = normalizeUserIdList(data.view_permission);
+    return permissionList.includes(Number(user.id));
+  }
+
+  return false;
+};
+
 // 上传数据文件（使用事务+行锁防止并发额度击穿）
 router.post('/upload', authenticate, authorize('student', 'teacher', 'admin', 'civilian'), (req, res, next) => {
   req.uploadType = 'data';
@@ -104,9 +190,41 @@ router.post('/upload', authenticate, authorize('student', 'teacher', 'admin', 'c
         description,
         data_type = 'raw',
         visibility = 'private',
+        view_permission,
         liability_statement,
         liability_accepted
       } = req.body;
+
+      if (!VISIBILITY_VALUES.has(visibility)) {
+        throw new Error('INVALID_VISIBILITY');
+      }
+
+      const viewPermissionIds = normalizeUserIdList(view_permission);
+
+      if (visibility === 'limited' && viewPermissionIds.length === 0) {
+        throw new Error('LIMITED_PERMISSION_REQUIRED');
+      }
+
+      let storedViewPermission = null;
+
+      if (visibility === 'limited') {
+        const placeholders = viewPermissionIds.map(() => '?').join(',');
+
+        const [validUsers] = await connection.execute(
+          `SELECT id
+           FROM users
+           WHERE id IN (${placeholders})
+             AND status = 'active'
+             AND deleted_at IS NULL`,
+          viewPermissionIds
+        );
+
+        if (validUsers.length !== viewPermissionIds.length) {
+          throw new Error('INVALID_VIEW_PERMISSION');
+        }
+
+        storedViewPermission = JSON.stringify(validUsers.map((item) => Number(item.id)));
+      }
 
       const liabilityAccepted =
         liability_accepted === true ||
@@ -115,8 +233,8 @@ router.post('/upload', authenticate, authorize('student', 'teacher', 'admin', 'c
 
       const [insertResult] = await connection.execute(
         `INSERT INTO data_submissions (submitter_id, title, description, data_type, data_format,
-         file_path, file_size, file_hash, original_filename, visibility, liability_statement, is_liability_accepted)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         file_path, file_size, file_hash, original_filename, visibility, view_permission, liability_statement, is_liability_accepted)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           req.user.id,
           title || req.file.originalname,
@@ -128,6 +246,7 @@ router.post('/upload', authenticate, authorize('student', 'teacher', 'admin', 'c
           fileHash,
           req.file.originalname,
           visibility,
+          storedViewPermission,
           liability_statement || null,
           liabilityAccepted ? 1 : 0
         ]
@@ -158,6 +277,15 @@ router.post('/upload', authenticate, authorize('student', 'teacher', 'admin', 'c
     }
     if (error.message === 'DUPLICATE_FILE') {
       return res.status(409).json({ error: '该文件已上传过' });
+    }
+    if (error.message === 'INVALID_VISIBILITY') {
+      return res.status(400).json({ error: '无效的可见性设置' });
+    }
+    if (error.message === 'LIMITED_PERMISSION_REQUIRED') {
+      return res.status(400).json({ error: '受限数据必须指定至少一个可见人员' });
+    }
+    if (error.message === 'INVALID_VIEW_PERMISSION') {
+      return res.status(400).json({ error: '指定可见人员不存在或不可用' });
     }
     logger.error('数据上传失败:', error);
     res.status(500).json({ error: '上传失败' });
@@ -283,8 +411,59 @@ router.get('/my', authenticate, async (req, res) => {
   }
 });
 
+// 获取公开数据列表：仅返回终审通过且 visibility=public 的数据
+router.get('/public', optionalAuth, async (req, res) => {
+  try {
+    const page = Math.max(Number.parseInt(req.query.page, 10) || 1, 1);
+    const limit = Math.min(Math.max(Number.parseInt(req.query.limit, 10) || 10, 1), 50);
+    const offset = (page - 1) * limit;
+
+    const [data] = await pool.query(
+      `SELECT
+         d.id,
+         d.title,
+         d.description,
+         d.data_type,
+         d.data_format,
+         d.file_size,
+         d.citation_count,
+         d.download_count,
+         d.completed_at,
+         u.real_name AS submitter_real_name
+       FROM data_submissions d
+       JOIN users u ON d.submitter_id = u.id
+       WHERE d.visibility = 'public'
+         AND d.review_status = 'final_approved'
+         AND d.deleted_at IS NULL
+       ORDER BY d.completed_at DESC, d.id DESC
+       LIMIT ? OFFSET ?`,
+      [limit, offset]
+    );
+
+    const [countResult] = await pool.execute(
+      `SELECT COUNT(*) AS total
+       FROM data_submissions
+       WHERE visibility = 'public'
+         AND review_status = 'final_approved'
+         AND deleted_at IS NULL`
+    );
+
+    res.json({
+      data,
+      pagination: {
+        page,
+        limit,
+        total: countResult[0].total
+      }
+    });
+  } catch (error) {
+    logger.error('获取公开数据列表失败:', error);
+    res.status(500).json({ error: '获取公开数据列表失败' });
+  }
+});
+
 // 获取数据详情
-router.get('/:id', authenticate, auditLog('data', 'view'), async (req, res) => {
+router.get('/:id', optionalAuth, auditLog('data', 'view'), async (req, res) => {
   try {
     const dataId = req.params.id;
 
@@ -302,30 +481,14 @@ router.get('/:id', authenticate, auditLog('data', 'view'), async (req, res) => {
 
     const data = dataList[0];
 
-    // 修正：只有最终终审通过(final_approved)的公开数据才允许全员免签查看
-    let hasPermission =
-      data.submitter_id === req.user.id ||
-      (data.visibility === 'public' && data.review_status === 'final_approved') ||
-      req.user.role === 'admin';
-
-    // 检查limited权限
-    if (data.visibility === 'limited' && data.view_permission) {
-      try {
-        const permissionList = JSON.parse(data.view_permission);
-        if (permissionList.includes(req.user.id)) {
-          hasPermission = true;
-        }
-      } catch (e) {
-        logger.error("解析view_permission失败:", e);
-      }
-    }
+    const hasPermission = await canAccessData(pool, req.user, data);
 
     if (!hasPermission) {
       return res.status(403).json({ error: '无权查看此数据' });
     }
 
     // 盲审模式处理：如果是专家审核中，隐藏提交者信息
-    if (data.review_status === 'expert_reviewing' && req.user.role === 'expert') {
+    if (data.review_status === 'expert_reviewing' && req.user?.role === 'expert') {
       data.submitter_name = null;
       data.submitter_real_name = null;
       data.submitter_id = null;
@@ -339,12 +502,12 @@ router.get('/:id', authenticate, auditLog('data', 'view'), async (req, res) => {
 });
 
 // 下载数据
-router.get('/:id/download', authenticate, auditLog('data', 'download'), async (req, res) => {
+router.get('/:id/download', optionalAuth, auditLog('data', 'download'), async (req, res) => {
   try {
     const dataId = req.params.id;
 
     const [dataList] = await pool.execute(
-      'SELECT file_path, original_filename, file_hash, submitter_id, visibility, view_permission, review_status FROM data_submissions WHERE id = ? AND deleted_at IS NULL',
+      'SELECT id, file_path, original_filename, file_hash, submitter_id, visibility, view_permission, review_status FROM data_submissions WHERE id = ? AND deleted_at IS NULL',
       [dataId]
     );
 
@@ -354,35 +517,7 @@ router.get('/:id/download', authenticate, auditLog('data', 'download'), async (r
 
     const data = dataList[0];
 
-    // 权限检查
-    let hasPermission =
-      data.submitter_id === req.user.id ||
-      (data.visibility === 'public' && data.review_status === 'final_approved') ||
-      req.user.role === 'admin';
-
-    // 教师可以查看自己学生的数据
-    if (!hasPermission && req.user.role === 'teacher') {
-      const [relations] = await pool.execute(
-        `SELECT id FROM teacher_student_relations
-         WHERE teacher_id = ? AND student_id = ? AND status = 'active'`,
-        [req.user.id, data.submitter_id]
-      );
-      if (relations.length > 0) {
-        hasPermission = true;
-      }
-    }
-
-    // 检查limited权限
-    if (data.visibility === 'limited' && data.view_permission) {
-      try {
-        const permissionList = JSON.parse(data.view_permission);
-        if (permissionList.includes(req.user.id)) {
-          hasPermission = true;
-        }
-      } catch (e) {
-        logger.error("解析view_permission失败:", e);
-      }
-    }
+    const hasPermission = await canAccessData(pool, req.user, data);
 
     if (!hasPermission) {
       return res.status(403).json({ error: '无权下载此数据' });

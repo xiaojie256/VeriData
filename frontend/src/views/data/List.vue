@@ -128,7 +128,7 @@
             </el-button>
 
             <el-button
-              v-if="!isViewingStudent && canSubmit(row.review_status)"
+              v-if="canShowSubmit(row)"
               link
               type="success"
               @click="submitReview(row)"
@@ -242,6 +242,21 @@ const getScoreType = (score) => {
 }
 
 const canSubmit = (status) => ['draft', 'teacher_rejected', 'expert_rejected', 'final_rejected'].includes(status)
+
+const currentUserRole = computed(() => {
+  try {
+    const u = JSON.parse(localStorage.getItem('user'))
+    return u?.role || ''
+  } catch {
+    return ''
+  }
+})
+
+const canShowSubmit = (row) => {
+  return !isViewingStudent.value &&
+    currentUserRole.value === 'student' &&
+    canSubmit(row.review_status)
+}
 
 const canDelete = (status) => ['draft', 'final_rejected'].includes(status)
 

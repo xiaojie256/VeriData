@@ -1,6 +1,11 @@
 const express = require('express');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
+const {
+  createLoginSession,
+  destroyLoginSession,
+  destroyAllLoginSessions
+} = require('../utils/session');
 const { body, validationResult } = require('express-validator');
 const pool = require('../utils/database');
 const logger = require('../utils/logger');
@@ -215,8 +220,13 @@ router.post('/register', [
     // 6. 注册成功后，立刻销毁 Redis 验证码，防止被恶意复用
     await redisClient.del(redisKey);
 
-    // 7. 签发登录凭证 JWT
-    const token = jwt.sign({ userId: result.insertId }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+    // 7. 签发登录凭证 JWT，并创建服务端唯一会话
+    const sessionId = await createLoginSession(result.insertId);
+    const token = jwt.sign(
+      { userId: result.insertId, sessionId },
+      JWT_SECRET,
+      { expiresIn: JWT_EXPIRES_IN }
+    );
 
     const newUser = {
       id: result.insertId,
@@ -320,8 +330,13 @@ router.post('/login', [
       [ip, user.id]
     );
 
-    // 生成JWT
-    const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+    // 生成服务端唯一会话，并把 sessionId 写入 JWT
+    const sessionId = await createLoginSession(user.id);
+    const token = jwt.sign(
+      { userId: user.id, sessionId },
+      JWT_SECRET,
+      { expiresIn: JWT_EXPIRES_IN }
+    );
 
     logger.info(`用户登录: ${user.username}`);
 
@@ -332,6 +347,20 @@ router.post('/login', [
   } catch (error) {
     logger.error('登录失败:', error);
     res.status(500).json({ error: '登录失败，请稍后重试' });
+  }
+});
+
+// 退出登录
+router.post('/logout', authenticate, async (req, res) => {
+  try {
+    await destroyLoginSession(req.user.id, req.auth?.sessionId);
+
+    logger.info(`用户退出登录: ${req.user.username}`);
+
+    res.json(ApiResponse.success(null, '退出登录成功'));
+  } catch (error) {
+    logger.error('退出登录失败:', error);
+    res.status(500).json({ error: '退出登录失败，请稍后重试' });
   }
 });
 
@@ -390,8 +419,11 @@ router.post('/change-password', authenticate, [
       [newPasswordHash, req.user.id]
     );
 
-    logger.info(`用户修改密码: ${req.user.username}`);
-    res.json({ message: '密码修改成功' });
+    // 密码变更属于高风险安全事件，清空该账号所有登录会话
+    await destroyAllLoginSessions(req.user.id);
+
+    logger.info(`用户修改密码并清空登录会话: ${req.user.username}`);
+    res.json({ message: '密码修改成功，请重新登录' });
   } catch (error) {
     logger.error('修改密码失败:', error);
     res.status(500).json({ error: '修改密码失败' });
@@ -450,6 +482,9 @@ router.post('/reset-password', [
     // 3. 加密并重写密码
     const newPasswordHash = await bcrypt.hash(newPassword, 10);
     await pool.execute('UPDATE users SET password_hash = ? WHERE email = ?', [newPasswordHash, email]);
+
+    // 密码重置后清空该账号所有登录会话，防止旧 token 继续有效
+    await destroyAllLoginSessions(users[0].id);
 
     // 4. 清除已被成功消耗的验证码
     await redisClient.del(redisKey);

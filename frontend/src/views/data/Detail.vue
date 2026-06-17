@@ -56,13 +56,13 @@
                 <el-tag v-else type="info">待检测</el-tag>
 
                 <el-button
-                  v-if="!data?.ai_check_status || data?.ai_check_status === 'pending' || data?.ai_check_status === 'failed'"
+                  v-if="canTriggerAiCheck"
                   size="small"
                   type="primary"
                   :loading="aiRetryLoading"
                   @click="triggerAiAnalysis"
                 >
-                  重新检测
+                  {{ data?.ai_check_status === 'failed' || data?.ai_check_status === 'completed' ? '重新检测' : '启动AI检测' }}
                 </el-button>
               </div>
             </div>
@@ -205,9 +205,11 @@ import { ElMessage } from 'element-plus'
 import { ArrowLeft, Download } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 import { api } from '../../store'
+import { useStore } from 'vuex'
 
 const route = useRoute()
 const router = useRouter()
+const store = useStore()
 const data = ref(null)
 const aiResult = ref(null)
 const reviewRecords = ref([])
@@ -216,6 +218,21 @@ const teacher = ref(null)
 const teacherLoading = ref(false)
 const submitLoading = ref(false)
 const aiRetryLoading = ref(false)
+
+const currentUser = computed(() => {
+  return store.state.user || JSON.parse(localStorage.getItem('user') || '{}')
+})
+
+const currentUserRole = computed(() => currentUser.value?.role || '')
+
+const canTriggerAiCheck = computed(() => {
+  if (!data.value) return false
+  if (data.value.ai_check_status === 'running') return false
+
+  const role = currentUserRole.value
+  return ['admin', 'teacher', 'expert'].includes(role) ||
+    data.value.user_id === currentUser.value?.id
+})
 
 const statusMap = {
   'draft': '草稿',
@@ -375,8 +392,14 @@ const triggerAiAnalysis = async () => {
   aiRetryLoading.value = true
 
   try {
-    await api.post(`/ai/analyze/${route.params.id}`)
-    ElMessage.success('AI检测已启动')
+    const result = await api.post(`/ai/analyze/${route.params.id}`)
+
+    if (result?.skipped) {
+      ElMessage.info(result.message || '当前文件类型暂不支持AI检测')
+    } else {
+      ElMessage.success(result?.message || 'AI检测已启动')
+    }
+
     await fetchData()
   } catch (err) {
     const msg = err?.error || 'AI检测启动失败，请检查AI服务是否正常'

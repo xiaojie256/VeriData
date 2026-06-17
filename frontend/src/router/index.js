@@ -54,6 +54,12 @@ const routes = [
         meta: { title: "我的数据", icon: "Document" },
       },
       {
+        path: "data/public",
+        name: "PublicDataList",
+        component: () => import("../views/data/PublicList.vue"),
+        meta: { title: "公开数据", icon: "Collection" },
+      },
+      {
         path: "data/:id",
         name: "DataDetail",
         component: () => import("../views/data/Detail.vue"),
