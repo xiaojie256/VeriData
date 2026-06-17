@@ -3,7 +3,7 @@
     <div class="page-header">
       <h2 class="page-title">公开数据</h2>
       <el-alert
-        title="这里只展示已通过终审并设置为公开的数据。"
+        title="这里只展示已设置为公开，且已通过专家审核或终审的数据。"
         type="info"
         :closable="false"
         show-icon
@@ -12,7 +12,11 @@
     </div>
 
     <el-card>
-      <el-table :data="dataList" v-loading="loading">
+      <el-table
+        :data="dataList"
+        v-loading="loading"
+        empty-text="暂无公开数据：请确认数据已设置为公开，并已通过专家审核或终审。"
+      >
         <el-table-column label="标题" min-width="220">
           <template #default="{ row }">
             <el-link type="primary" @click="$router.push(`/data/${row.id}`)">
@@ -33,6 +37,14 @@
 
         <el-table-column prop="submitter_real_name" label="提交者" width="140" />
 
+        <el-table-column label="审核状态" width="120">
+          <template #default="{ row }">
+            <el-tag :type="getReviewStatusTagType(row.review_status)">
+              {{ getReviewStatusText(row.review_status) }}
+            </el-tag>
+          </template>
+        </el-table-column>
+
         <el-table-column label="下载次数" width="100">
           <template #default="{ row }">
             {{ row.download_count || 0 }}
@@ -41,7 +53,7 @@
 
         <el-table-column label="公开时间" width="180">
           <template #default="{ row }">
-            {{ formatDate(row.completed_at) }}
+            {{ formatDate(row.public_approved_at || row.completed_at || row.updated_at || row.created_at) }}
           </template>
         </el-table-column>
       </el-table>
@@ -86,6 +98,20 @@ const formatFileSize = (size) => {
 const formatDate = (value) => {
   if (!value) return '-'
   return new Date(value).toLocaleString()
+}
+
+const getReviewStatusText = (status) => {
+  const statusMap = {
+    expert_approved: '专家通过',
+    final_approved: '终审通过'
+  }
+  return statusMap[status] || status || '-'
+}
+
+const getReviewStatusTagType = (status) => {
+  if (status === 'final_approved') return 'success'
+  if (status === 'expert_approved') return 'warning'
+  return 'info'
 }
 
 const loadData = async (page = 1) => {

@@ -110,6 +110,12 @@ const consumeQuota = async (userId, dataId, actionType = 'data_submit') => {
 
 const VISIBILITY_VALUES = new Set(['private', 'limited', 'public']);
 
+// 公开数据允许展示的审核状态：
+// expert_approved：专家审核通过
+// final_approved：管理员终审通过
+const PUBLIC_REVIEW_STATUSES = ['expert_approved', 'final_approved'];
+const PUBLIC_REVIEW_STATUS_PLACEHOLDERS = PUBLIC_REVIEW_STATUSES.map(() => '?').join(', ');
+
 const normalizeUserIdList = (value) => {
   if (!value) return [];
 
@@ -176,7 +182,10 @@ const canReviewData = async (db, user, data) => {
 const canAccessData = async (db, user, data) => {
   if (!data) return false;
 
-  if (data.visibility === 'public' && data.review_status === 'final_approved') {
+  if (
+    data.visibility === 'public' &&
+    PUBLIC_REVIEW_STATUSES.includes(data.review_status)
+  ) {
     return true;
   }
 
@@ -485,12 +494,12 @@ router.get('/my', authenticate, async (req, res) => {
   }
 });
 
-// 获取公开数据列表：仅返回终审通过且 visibility=public 的数据
+// 获取公开数据列表：返回设置为公开，且已通过专家审核或管理员终审的数据
 router.get('/public', optionalAuth, async (req, res) => {
   try {
-    const page = Math.max(Number.parseInt(req.query.page, 10) || 1, 1);
-    const limit = Math.min(Math.max(Number.parseInt(req.query.limit, 10) || 10, 1), 50);
-    const offset = (page - 1) * limit;
+    const pageNum = Math.max(Number.parseInt(req.query.page, 10) || 1, 1);
+    const limitNum = Math.min(Math.max(Number.parseInt(req.query.limit, 10) || 10, 1), 100);
+    const offset = (pageNum - 1) * limitNum;
 
     const [data] = await pool.query(
       `SELECT
@@ -503,30 +512,35 @@ router.get('/public', optionalAuth, async (req, res) => {
          d.citation_count,
          d.download_count,
          d.completed_at,
+         d.updated_at,
+         d.created_at,
+         COALESCE(d.completed_at, d.updated_at, d.created_at) AS public_approved_at,
+         d.review_status,
          u.real_name AS submitter_real_name
        FROM data_submissions d
        JOIN users u ON d.submitter_id = u.id
        WHERE d.visibility = 'public'
-         AND d.review_status = 'final_approved'
+         AND d.review_status IN (${PUBLIC_REVIEW_STATUS_PLACEHOLDERS})
          AND d.deleted_at IS NULL
-       ORDER BY d.completed_at DESC, d.id DESC
+       ORDER BY public_approved_at DESC, d.id DESC
        LIMIT ? OFFSET ?`,
-      [limit, offset]
+      [...PUBLIC_REVIEW_STATUSES, limitNum, offset]
     );
 
     const [countResult] = await pool.execute(
       `SELECT COUNT(*) AS total
        FROM data_submissions
        WHERE visibility = 'public'
-         AND review_status = 'final_approved'
-         AND deleted_at IS NULL`
+         AND review_status IN (${PUBLIC_REVIEW_STATUS_PLACEHOLDERS})
+         AND deleted_at IS NULL`,
+      PUBLIC_REVIEW_STATUSES
     );
 
     res.json({
       data,
       pagination: {
-        page,
-        limit,
+        page: pageNum,
+        limit: limitNum,
         total: countResult[0].total
       }
     });
