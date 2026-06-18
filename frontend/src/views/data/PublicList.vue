@@ -1,9 +1,9 @@
 <template>
   <div class="page-container">
     <div class="page-header">
-      <h2 class="page-title">公开数据</h2>
+      <h2 class="page-title">可见数据</h2>
       <el-alert
-        title="这里只展示已设置为公开，且已通过专家审核或终审的数据。"
+        title="这里展示已公开且审核通过的数据，以及您被授权查看的受限数据。"
         type="info"
         :closable="false"
         show-icon
@@ -15,7 +15,7 @@
       <el-table
         :data="dataList"
         v-loading="loading"
-        empty-text="暂无公开数据：请确认数据已设置为公开，并已通过专家审核或终审。"
+        empty-text="暂无可展示的数据"
       >
         <el-table-column label="标题" min-width="220">
           <template #default="{ row }">
@@ -118,7 +118,7 @@ const loadData = async (page = 1) => {
   loading.value = true
 
   try {
-    const res = await api.get('/data/public', {
+    const res = await api.get('/data/visible', {
       params: {
         page,
         limit: pagination.value.limit
@@ -132,7 +132,7 @@ const loadData = async (page = 1) => {
       total: res.pagination?.total || 0
     }
   } catch (error) {
-    ElMessage.error(error.error || '获取公开数据失败')
+    ElMessage.error(error.error || '获取可见数据失败')
   } finally {
     loading.value = false
   }

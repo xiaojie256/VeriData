@@ -19,6 +19,125 @@ const normalizeReviewScore = (score) => {
   return Math.max(0, Math.min(100, n));
 };
 
+const REVIEW_TYPE_LABELS = {
+  teacher: '导师一审',
+  expert: '专家盲审',
+  admin: '管理员终审'
+};
+
+const REVIEW_STAGE_ORDER = {
+  teacher: 1,
+  expert: 2,
+  admin: 3
+};
+
+const safeJsonArray = value => {
+  if (!value) return [];
+
+  if (Array.isArray(value)) {
+    return value;
+  }
+
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return value ? [value] : [];
+    }
+  }
+
+  return [];
+};
+
+const serializePriorReview = row => {
+  return {
+    id: row.id,
+    review_type: row.review_type,
+    review_type_label: REVIEW_TYPE_LABELS[row.review_type] || row.review_type,
+    status: row.status,
+    completeness_score: row.completeness_score,
+    accuracy_score: row.accuracy_score,
+    originality_score: row.originality_score,
+    methodology_score: row.methodology_score,
+    overall_score: row.overall_score,
+    comments: row.comments,
+    issues_found: safeJsonArray(row.issues_found),
+    suggestions: row.suggestions,
+    ai_assisted: Boolean(row.ai_assisted),
+    completed_at: row.completed_at,
+
+    // 审核人身份脱敏
+    reviewer_display_name: null,
+    reviewer_identity_hidden: true
+  };
+};
+
+const attachPriorReviews = async (db, reviews) => {
+  if (!reviews.length) {
+    return reviews;
+  }
+
+  const dataIds = [...new Set(reviews.map(item => item.data_id).filter(Boolean))];
+
+  if (!dataIds.length) {
+    return reviews;
+  }
+
+  const placeholders = dataIds.map(() => '?').join(',');
+
+  const [rows] = await db.query(
+    `SELECT
+      id,
+      data_id,
+      review_type,
+      status,
+      completeness_score,
+      accuracy_score,
+      originality_score,
+      methodology_score,
+      overall_score,
+      comments,
+      issues_found,
+      suggestions,
+      ai_assisted,
+      completed_at
+    FROM review_records
+    WHERE data_id IN (${placeholders})
+      AND status <> 'pending'
+    ORDER BY
+      FIELD(review_type, 'teacher', 'expert', 'admin'),
+      completed_at ASC,
+      id ASC`,
+    dataIds
+  );
+
+  const grouped = rows.reduce((acc, row) => {
+    if (!acc[row.data_id]) {
+      acc[row.data_id] = [];
+    }
+
+    acc[row.data_id].push(row);
+    return acc;
+  }, {});
+
+  return reviews.map(review => {
+    const currentStage = REVIEW_STAGE_ORDER[review.review_type] || 99;
+
+    const priorReviews = (grouped[review.data_id] || [])
+      .filter(item => {
+        const itemStage = REVIEW_STAGE_ORDER[item.review_type] || 0;
+        return itemStage < currentStage;
+      })
+      .map(serializePriorReview);
+
+    return {
+      ...review,
+      prior_reviews: priorReviews
+    };
+  });
+};
+
 // 获取待审核列表
 router.get(
   "/pending",
@@ -102,8 +221,10 @@ router.get(
         params
       );
 
+      const reviewsWithPrior = await attachPriorReviews(pool, reviews);
+
       res.json({
-        reviews,
+        reviews: reviewsWithPrior,
         pagination: {
           page,
           limit,

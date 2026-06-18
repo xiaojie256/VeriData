@@ -45,19 +45,27 @@ const routes = [
         path: "data/upload",
         name: "DataUpload",
         component: () => import("../views/data/Upload.vue"),
-        meta: { title: "数据上传", icon: "Upload" },
+        meta: {
+          title: "数据上传",
+          icon: "Upload",
+          roles: ["student", "teacher", "admin", "civilian"],
+        },
       },
       {
         path: "data/list",
         name: "DataList",
         component: () => import("../views/data/List.vue"),
-        meta: { title: "我的数据", icon: "Document" },
+        meta: {
+          title: "我的数据",
+          icon: "Document",
+          roles: ["student", "teacher", "admin", "civilian"],
+        },
       },
       {
         path: "data/public",
         name: "PublicDataList",
         component: () => import("../views/data/PublicList.vue"),
-        meta: { title: "公开数据", icon: "Collection" },
+        meta: { title: "可见数据", icon: "Collection" },
       },
       {
         path: "data/:id",

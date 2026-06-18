@@ -47,10 +47,18 @@
           </template>
         </el-table-column>
         
-        <el-table-column label="操作" width="150" fixed="right">
+        <el-table-column label="操作" width="240" fixed="right">
           <template #default="{ row }">
             <el-button type="primary" size="small" @click="openReviewDialog(row)">
               审核
+            </el-button>
+
+            <el-button size="small" @click="openDataDetail(row)">
+              详情
+            </el-button>
+
+            <el-button type="success" size="small" @click="downloadData(row)">
+              下载
             </el-button>
           </template>
         </el-table-column>
@@ -78,7 +86,19 @@
         <!-- 数据预览 -->
         <el-card class="preview-card">
           <template #header>
-            <span>数据信息</span>
+            <div class="dialog-card-header">
+              <span>数据信息</span>
+
+              <div class="dialog-card-actions">
+                <el-button size="small" @click="openDataDetail(currentReview)">
+                  打开详情页
+                </el-button>
+
+                <el-button type="success" size="small" @click="downloadData(currentReview)">
+                  下载原始文件
+                </el-button>
+              </div>
+            </div>
           </template>
           <el-descriptions :column="2">
             <el-descriptions-item label="标题">{{ currentReview.title }}</el-descriptions-item>
@@ -114,7 +134,73 @@
             <p style="margin: 8px 0 0 0; color: #333; line-height: 1.6;">{{ aiAnalysis?.llm_insight }}</p>
           </div>
         </el-card>
-        
+
+        <!-- 前序审核结果 -->
+        <el-card
+          v-if="currentReview?.prior_reviews?.length"
+          class="preview-card"
+        >
+          <template #header>
+            <span>前序审核结果</span>
+          </template>
+
+          <el-timeline>
+            <el-timeline-item
+              v-for="record in currentReview.prior_reviews"
+              :key="record.id || `${record.review_type}-${record.completed_at}`"
+              :timestamp="formatDate(record.completed_at)"
+            >
+              <h4>
+                {{ record.review_type_label || reviewTypeMap[record.review_type] || record.review_type }}
+                -
+                {{ reviewStatusMap[record.status] || record.status }}
+              </h4>
+
+              <p>审核人：{{ record.reviewer_display_name || '已脱敏' }}</p>
+
+              <p v-if="record.overall_score">
+                综合评分：{{ record.overall_score }}/10
+              </p>
+
+              <p
+                v-if="
+                  record.completeness_score ||
+                  record.accuracy_score ||
+                  record.originality_score ||
+                  record.methodology_score
+                "
+              >
+                分项评分：
+                完整性 {{ record.completeness_score ?? '-' }}，
+                准确性 {{ record.accuracy_score ?? '-' }}，
+                原创性 {{ record.originality_score ?? '-' }}，
+                方法论 {{ record.methodology_score ?? '-' }}
+              </p>
+
+              <p v-if="record.comments">
+                审核意见：{{ record.comments }}
+              </p>
+
+              <p v-if="Array.isArray(record.issues_found) && record.issues_found.length">
+                发现问题：{{ record.issues_found.join('；') }}
+              </p>
+
+              <p v-if="record.suggestions">
+                修改建议：{{ record.suggestions }}
+              </p>
+            </el-timeline-item>
+          </el-timeline>
+        </el-card>
+
+        <el-alert
+          v-else
+          class="preview-card"
+          type="info"
+          show-icon
+          :closable="false"
+          title="暂无前序审核结果"
+        />
+
         <!-- 评分表单 -->
         <el-form :model="reviewForm" label-width="86px" class="review-score-form">
           <div class="score-grid">
@@ -168,12 +254,14 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { useStore } from 'vuex'
 import { ElMessage } from 'element-plus'
 import dayjs from 'dayjs'
 import { api } from '../../store'
 
 const store = useStore()
+const router = useRouter()
 const loading = ref(false)
 const reviewList = ref([])
 const reviewDialogVisible = ref(false)
@@ -219,6 +307,19 @@ const typeMap = {
 }
 
 const formatDate = (date) => dayjs(date).format('YYYY-MM-DD HH:mm')
+
+const reviewTypeMap = {
+  teacher: '导师一审',
+  expert: '专家盲审',
+  admin: '管理员终审'
+}
+
+const reviewStatusMap = {
+  pending: '待审核',
+  approved: '通过',
+  rejected: '拒绝',
+  revision_required: '需修改'
+}
 
 const getScoreType = (score) => {
   if (score >= 80) return 'success'
@@ -269,6 +370,35 @@ const openReviewDialog = async (row) => {
 
 const viewDetail = (row) => {
   openReviewDialog(row)
+}
+
+const openDataDetail = row => {
+  const dataId = row?.data_id || row?.id
+
+  if (!dataId) {
+    ElMessage.warning('未找到数据ID')
+    return
+  }
+
+  router.push(`/data/${dataId}`)
+}
+
+const downloadData = row => {
+  const dataId = row?.data_id || row?.id
+
+  if (!dataId) {
+    ElMessage.warning('未找到数据ID')
+    return
+  }
+
+  const token = localStorage.getItem('token')
+
+  if (!token) {
+    ElMessage.warning('请先登录后再下载')
+    return
+  }
+
+  window.open(`/api/data/${dataId}/download?token=${encodeURIComponent(token)}`, '_blank')
 }
 
 const submitReview = async () => {
@@ -363,5 +493,18 @@ onMounted(() => {
   .score-grid {
     grid-template-columns: 1fr;
   }
+}
+
+.dialog-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.dialog-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 </style>

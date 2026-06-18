@@ -40,6 +40,27 @@
             <el-descriptions-item label="文件格式">{{ data?.data_format?.toUpperCase() }}</el-descriptions-item>
             <el-descriptions-item label="文件大小">{{ formatFileSize(data?.file_size) }}</el-descriptions-item>
             <el-descriptions-item label="可见性">{{ visibilityMap[data?.visibility] }}</el-descriptions-item>
+            <el-descriptions-item
+              v-if="data?.visibility === 'limited' && data?.view_permission_users?.length"
+              label="受限可见人员"
+              :span="2"
+            >
+              <el-tag
+                v-for="user in data.view_permission_users"
+                :key="user.id"
+                size="small"
+                class="visible-user-tag"
+              >
+                {{ user.real_name || user.username }}（{{ user.email || user.role }}）
+              </el-tag>
+            </el-descriptions-item>
+            <el-descriptions-item
+              v-else-if="data?.visibility === 'limited' && canViewPermissionUsers"
+              label="受限可见人员"
+              :span="2"
+            >
+              <el-text type="info">未设置或暂无可见人员</el-text>
+            </el-descriptions-item>
             <el-descriptions-item label="版本">V{{ data?.version }}</el-descriptions-item>
             <el-descriptions-item label="引用次数">{{ data?.citation_count }}</el-descriptions-item>
             <el-descriptions-item label="创建时间">{{ formatDate(data?.created_at) }}</el-descriptions-item>
@@ -305,14 +326,49 @@
           <el-timeline v-if="reviewRecords.length">
             <el-timeline-item
               v-for="record in reviewRecords"
-              :key="record.id"
+              :key="record.id || `${record.review_type}-${record.completed_at}`"
               :type="record.status === 'approved' ? 'success' : record.status === 'rejected' ? 'danger' : 'primary'"
               :icon="record.review_type === 'teacher' ? 'User' : record.review_type === 'expert' ? 'Medal' : 'Setting'"
+              :timestamp="formatDate(record.completed_at || record.created_at)"
             >
-              <h4>{{ reviewTypeMap[record.review_type] }} - {{ statusMap[record.status] }}</h4>
-              <p v-if="record.comments">审核意见：{{ record.comments }}</p>
-              <p v-if="record.overall_score">综合评分：{{ record.overall_score }}</p>
-              <p class="time">{{ formatDate(record.completed_at || record.created_at) }}</p>
+              <h4>
+                {{ record.review_type_label || reviewTypeMap[record.review_type] || record.review_type }}
+                -
+                {{ reviewStatusMap[record.status] || statusMap[record.status] || record.status }}
+              </h4>
+
+              <p>审核人：{{ record.reviewer_display_name || '已脱敏' }}</p>
+
+              <p v-if="record.overall_score">
+                综合评分：{{ record.overall_score }}/10
+              </p>
+
+              <p
+                v-if="
+                  record.completeness_score ||
+                  record.accuracy_score ||
+                  record.originality_score ||
+                  record.methodology_score
+                "
+              >
+                分项评分：
+                完整性 {{ record.completeness_score ?? '-' }}，
+                准确性 {{ record.accuracy_score ?? '-' }}，
+                原创性 {{ record.originality_score ?? '-' }}，
+                方法论 {{ record.methodology_score ?? '-' }}
+              </p>
+
+              <p v-if="record.comments">
+                审核意见：{{ record.comments }}
+              </p>
+
+              <p v-if="Array.isArray(record.issues_found) && record.issues_found.length">
+                发现问题：{{ record.issues_found.join('；') }}
+              </p>
+
+              <p v-if="record.suggestions">
+                修改建议：{{ record.suggestions }}
+              </p>
             </el-timeline-item>
           </el-timeline>
           
@@ -523,6 +579,20 @@ const reviewTypeMap = {
   'admin': '管理员终审'
 }
 
+const reviewStatusMap = {
+  'pending': '待审核',
+  'approved': '通过',
+  'rejected': '拒绝',
+  'revision_required': '需修改'
+}
+
+const canViewPermissionUsers = computed(() => {
+  const userId = currentUser.value?.id
+  const role = currentUserRole.value
+
+  return role === 'admin' || Number(userId) === Number(data.value?.submitter_id)
+})
+
 const scoreColors = [
   { color: '#f56c6c', percentage: 60 },
   { color: '#e6a23c', percentage: 80 },
@@ -701,10 +771,13 @@ const aiFailureReason = computed(() => {
 const fetchData = async ({ silent = false } = {}) => {
   try {
     const response = await api.get(`/data/${route.params.id}`)
-    data.value = response.data
+    const detail = response.data?.data || response.data
+    data.value = detail
 
-    const aiDetails = parseJsonMaybe(response.data?.ai_check_result)
-    aiResult.value = normalizeAiResult(aiDetails, response.data?.ai_check_score)
+    reviewRecords.value = detail.review_chain || detail.prior_reviews || []
+
+    const aiDetails = parseJsonMaybe(detail.ai_check_result)
+    aiResult.value = normalizeAiResult(aiDetails, detail.ai_check_score)
 
     startAiPollingIfNeeded()
   } catch (error) {
@@ -746,12 +819,7 @@ const triggerAiAnalysis = async () => {
 }
 
 const fetchReviewRecords = async () => {
-  try {
-    // 这里需要添加获取审核记录的API
-    // reviewRecords.value = response.reviews
-  } catch (error) {
-    console.error('获取审核记录失败', error)
-  }
+  reviewRecords.value = data.value?.review_chain || data.value?.prior_reviews || []
 }
 
 const downloadData = () => {
@@ -940,5 +1008,10 @@ onBeforeUnmount(() => {
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.visible-user-tag {
+  margin-right: 8px;
+  margin-bottom: 6px;
 }
 </style>

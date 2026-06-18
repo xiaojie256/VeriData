@@ -204,9 +204,7 @@ const isAiSupportedFile = (file) => {
   return AI_SUPPORTED_EXTENSIONS.includes(getFileExtension(file.name || ''))
 }
 
-const shouldAutoStartAi = computed(() => {
-  return !isAdmin.value
-})
+const shouldAutoStartAi = computed(() => true)
 
 const quotaPercent = computed(() => {
   const total = user.value?.quota_total || 1
@@ -354,7 +352,7 @@ const handleSubmit = async () => {
     const uploadedFile = selectedFile.value
     const aiSupported = isAiSupportedFile(uploadedFile)
 
-    if (shouldAutoStartAi.value && aiSupported) {
+    if (aiSupported) {
       try {
         await api.post(`/ai/analyze/${dataId}`)
         ElMessage.success('上传成功，AI检测已启动')
@@ -368,10 +366,8 @@ const handleSubmit = async () => {
 
         ElMessage.warning(`上传成功；${message}`)
       }
-    } else if (!aiSupported) {
-      ElMessage.success('上传成功；当前文件类型暂不支持自动AI检测')
     } else {
-      ElMessage.success('管理员上传已保存；如需AI检测，请在详情页手动启动')
+      ElMessage.success('上传成功；当前文件类型暂不支持自动AI检测')
     }
 
     // 刷新用户额度信息

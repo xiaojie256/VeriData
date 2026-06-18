@@ -116,6 +116,8 @@ const VISIBILITY_VALUES = new Set(['private', 'limited', 'public']);
 const PUBLIC_REVIEW_STATUSES = ['expert_approved', 'final_approved'];
 const PUBLIC_REVIEW_STATUS_PLACEHOLDERS = PUBLIC_REVIEW_STATUSES.map(() => '?').join(', ');
 
+const LIMITED_REVIEW_STATUSES = ['final_approved'];
+
 const normalizeUserIdList = (value) => {
   if (!value) return [];
 
@@ -195,12 +197,145 @@ const canAccessData = async (db, user, data) => {
     return true;
   }
 
-  if (data.visibility === 'limited' && data.view_permission) {
+  if (
+    data.visibility === 'limited' &&
+    LIMITED_REVIEW_STATUSES.includes(data.review_status) &&
+    data.view_permission
+  ) {
     const permissionList = normalizeUserIdList(data.view_permission);
     return permissionList.includes(Number(user.id));
   }
 
   return false;
+};
+
+const REVIEW_TYPE_LABELS = {
+  teacher: '导师一审',
+  expert: '专家盲审',
+  admin: '管理员终审'
+};
+
+const safeJsonArray = value => {
+  if (!value) return [];
+
+  if (Array.isArray(value)) {
+    return value;
+  }
+
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return value ? [value] : [];
+    }
+  }
+
+  return [];
+};
+
+const serializeReviewRecord = row => {
+  return {
+    id: row.id,
+    review_type: row.review_type,
+    review_type_label: REVIEW_TYPE_LABELS[row.review_type] || row.review_type,
+    status: row.status,
+    completeness_score: row.completeness_score,
+    accuracy_score: row.accuracy_score,
+    originality_score: row.originality_score,
+    methodology_score: row.methodology_score,
+    overall_score: row.overall_score,
+    comments: row.comments,
+    issues_found: safeJsonArray(row.issues_found),
+    suggestions: row.suggestions,
+    ai_assisted: Boolean(row.ai_assisted),
+    completed_at: row.completed_at,
+    created_at: row.created_at,
+
+    // 身份脱敏：只展示审核结果，不展示审核人身份
+    reviewer_display_name: null,
+    reviewer_identity_hidden: true
+  };
+};
+
+const getReviewChain = async (db, dataId) => {
+  const [rows] = await db.query(
+    `SELECT
+      id,
+      data_id,
+      reviewer_id,
+      review_type,
+      status,
+      completeness_score,
+      accuracy_score,
+      originality_score,
+      methodology_score,
+      overall_score,
+      comments,
+      issues_found,
+      suggestions,
+      ai_assisted,
+      completed_at,
+      created_at
+    FROM review_records
+    WHERE data_id = ?
+      AND status <> 'pending'
+    ORDER BY
+      FIELD(review_type, 'teacher', 'expert', 'admin'),
+      completed_at ASC,
+      id ASC`,
+    [dataId]
+  );
+
+  return rows.map(serializeReviewRecord);
+};
+
+const attachViewPermissionUsers = async (db, data, user) => {
+  if (!data || data.visibility !== 'limited') {
+    return data;
+  }
+
+  const isAdmin = user?.role === 'admin';
+  const isOwner = Number(user?.id) === Number(data.submitter_id);
+
+  // 只有管理员和数据发布者能看到完整受限名单
+  if (!isAdmin && !isOwner) {
+    delete data.view_permission;
+    data.view_permission_users = [];
+    return data;
+  }
+
+  const ids = normalizeUserIdList(data.view_permission);
+
+  if (!ids.length) {
+    data.view_permission_users = [];
+    return data;
+  }
+
+  const placeholders = ids.map(() => '?').join(',');
+
+  const [users] = await db.query(
+    `SELECT
+      id,
+      username,
+      real_name,
+      email,
+      role
+    FROM users
+    WHERE id IN (${placeholders})
+    ORDER BY FIELD(id, ${placeholders})`,
+    [...ids, ...ids]
+  );
+
+  data.view_permission_users = users.map(item => ({
+    id: item.id,
+    username: item.username,
+    real_name: item.real_name,
+    email: item.email,
+    role: item.role
+  }));
+
+  return data;
 };
 
 // 上传数据文件（使用事务+行锁防止并发额度击穿）
@@ -550,6 +685,90 @@ router.get('/public', optionalAuth, async (req, res) => {
   }
 });
 
+// 获取可见数据列表：公开且审核通过的数据 + 当前用户被授权查看的受限且终审通过的数据
+router.get('/visible', optionalAuth, async (req, res, next) => {
+  try {
+    const page = Math.max(Number(req.query.page) || 1, 1);
+    const limit = Math.min(Math.max(Number(req.query.limit) || 10, 1), 50);
+    const offset = (page - 1) * limit;
+
+    const whereParts = [
+      `(
+        d.visibility = 'public'
+        AND d.review_status IN (${PUBLIC_REVIEW_STATUS_PLACEHOLDERS})
+        AND d.deleted_at IS NULL
+      )`
+    ];
+
+    const baseParams = [...PUBLIC_REVIEW_STATUSES];
+
+    if (req.user?.id) {
+      whereParts.push(
+        `(
+          d.visibility = 'limited'
+          AND d.review_status = 'final_approved'
+          AND d.deleted_at IS NULL
+          AND d.view_permission IS NOT NULL
+          AND JSON_VALID(d.view_permission)
+          AND (
+            JSON_CONTAINS(d.view_permission, CAST(? AS JSON), '$')
+            OR JSON_CONTAINS(d.view_permission, JSON_QUOTE(?), '$')
+          )
+        )`
+      );
+
+      baseParams.push(String(req.user.id), String(req.user.id));
+    }
+
+    const whereSql = whereParts.map(w => `(${w})`).join(' OR ');
+
+    const [rows] = await pool.query(
+      `SELECT
+        d.id,
+        d.title,
+        d.description,
+        d.data_type,
+        d.data_format,
+        d.file_size,
+        d.visibility,
+        d.review_status,
+        d.ai_check_status,
+        d.ai_check_score,
+        d.ai_anomaly_detected,
+        d.submitted_at,
+        d.download_count,
+        u.username AS submitter_name,
+        u.real_name AS submitter_real_name
+      FROM data_submissions d
+      JOIN users u ON d.submitter_id = u.id
+      WHERE ${whereSql}
+      ORDER BY d.submitted_at DESC
+      LIMIT ? OFFSET ?`,
+      [...baseParams, limit, offset]
+    );
+
+    const [countRows] = await pool.query(
+      `SELECT COUNT(*) AS total
+      FROM data_submissions d
+      WHERE ${whereSql}`,
+      baseParams
+    );
+
+    const total = countRows[0]?.total || 0;
+
+    res.json({
+      data: rows,
+      pagination: {
+        page,
+        limit,
+        total
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // 获取数据详情
 router.get('/:id', optionalAuth, auditLog('data', 'view'), async (req, res) => {
   try {
@@ -581,6 +800,11 @@ router.get('/:id', optionalAuth, auditLog('data', 'view'), async (req, res) => {
       data.submitter_real_name = null;
       data.submitter_id = null;
     }
+
+    data.review_chain = await getReviewChain(pool, data.id);
+    data.prior_reviews = data.review_chain;
+
+    await attachViewPermissionUsers(pool, data, req.user);
 
     res.json({ data });
   } catch (error) {
