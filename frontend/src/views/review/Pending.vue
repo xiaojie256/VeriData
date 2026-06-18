@@ -159,7 +159,7 @@
                 {{ reviewStatusMap[record.status] || record.status }}
               </h4>
 
-              <p>审核人：{{ record.reviewer_display_name || '已脱敏' }}</p>
+              <p>审核人：{{ record.reviewer_display_name || '隐藏' }}</p>
 
               <p v-if="record.overall_score">
                 综合评分：{{ record.overall_score }}/10
