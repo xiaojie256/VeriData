@@ -569,6 +569,7 @@ import { ArrowLeft, Download } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 import { api } from '../../store'
 import { useStore } from 'vuex'
+import { downloadDataFile } from '../../utils/download'
 
 const route = useRoute()
 const router = useRouter()
@@ -1077,15 +1078,16 @@ const fetchReviewRecords = async () => {
   reviewRecords.value = data.value?.review_chain || data.value?.prior_reviews || []
 }
 
-const downloadData = () => {
-  const token = localStorage.getItem('token')
-
-  if (!token) {
-    ElMessage.warning('请先登录后再下载')
-    return
+const downloadData = async () => {
+  try {
+    await downloadDataFile(route.params.id, data.value?.original_filename || data.value?.title || 'download')
+  } catch (error) {
+    if (error?.response?.status === 401) {
+      ElMessage.warning('请先登录后再下载')
+    } else {
+      ElMessage.error('下载失败，请稍后重试')
+    }
   }
-
-  window.open(`/api/data/${route.params.id}/download?token=${encodeURIComponent(token)}`, '_blank')
 }
 
 const showSubmitDialog = async () => {

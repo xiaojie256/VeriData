@@ -13,8 +13,16 @@ const {
 
 const router = express.Router();
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL || 'http://localhost:5000';
+const AI_INTERNAL_TOKEN = process.env.AI_INTERNAL_TOKEN || '';
 
 const AI_SUPPORTED_EXTENSIONS = new Set(['.csv', '.xlsx', '.xls', '.json', '.txt'])
+
+const getAiHeaders = () => {
+  if (!AI_INTERNAL_TOKEN) {
+    logger.warn('AI_INTERNAL_TOKEN 未配置，调用 AI 服务可能会被拒绝')
+  }
+  return { 'X-Internal-Token': AI_INTERNAL_TOKEN }
+}
 
 const buildAiResult = (payload) => {
   return JSON.stringify({
@@ -96,7 +104,8 @@ const runAiAnalysis = async (dataId, data, llmConfig) => {
         llm_config: llmConfig
       },
       {
-        timeout: timeoutMs
+        timeout: timeoutMs,
+        headers: getAiHeaders()
       }
     )
 
@@ -356,6 +365,8 @@ router.post('/predict-quality', authenticate, authorize('teacher', 'expert', 'ad
 
     const response = await axios.post(`${AI_SERVICE_URL}/predict`, {
       data_preview
+    }, {
+      headers: getAiHeaders()
     });
 
     res.json(response.data);
@@ -386,7 +397,8 @@ router.post('/public-check', async (req, res) => {
         is_public: true
       },
       {
-        timeout: 30000
+        timeout: 30000,
+        headers: getAiHeaders()
       }
     );
 

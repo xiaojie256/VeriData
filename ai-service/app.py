@@ -23,6 +23,8 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
+AI_INTERNAL_TOKEN = os.environ.get('AI_INTERNAL_TOKEN', '').strip()
+AI_PROTECTED_PATHS = {'/analyze', '/quick-check', '/predict'}
 
 UPLOAD_ROOT = os.environ.get('UPLOAD_ROOT', '/app/uploads')
 
@@ -945,6 +947,23 @@ class DataAnalyzer:
 
 # 初始化分析器
 analyzer = DataAnalyzer()
+
+@app.before_request
+def verify_internal_token():
+    """保护 AI 服务内部接口，避免绕过后端直接调用。"""
+    if request.path not in AI_PROTECTED_PATHS:
+        return None
+
+    if not AI_INTERNAL_TOKEN:
+        logger.error('AI_INTERNAL_TOKEN 未配置，拒绝访问受保护的 AI 接口')
+        return jsonify({'error': 'AI服务内部鉴权未配置'}), 503
+
+    token = request.headers.get('X-Internal-Token', '').strip()
+    if token != AI_INTERNAL_TOKEN:
+        logger.warning(f'拒绝未授权 AI 内部接口请求: path={request.path}, remote={request.remote_addr}')
+        return jsonify({'error': '无权访问AI内部服务'}), 401
+
+    return None
 
 @app.route('/health', methods=['GET'])
 def health_check():

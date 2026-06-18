@@ -835,12 +835,33 @@ router.get('/:id/download', optionalAuth, auditLog('data', 'download'), async (r
       return res.status(403).json({ error: '无权下载此数据' });
     }
 
-    if (!fs.existsSync(data.file_path)) {
+    if (!data.file_path) {
+      return res.status(404).json({ error: '文件不存在' });
+    }
+
+    const uploadRoot = path.resolve(process.env.UPLOAD_PATH || './uploads');
+    const resolvedFilePath = path.resolve(data.file_path);
+    const isInsideUploadRoot =
+      resolvedFilePath === uploadRoot ||
+      resolvedFilePath.startsWith(uploadRoot + path.sep);
+
+    if (!isInsideUploadRoot) {
+      logger.warn('拒绝下载上传目录外的文件', {
+        dataId,
+        filePath: data.file_path,
+        resolvedFilePath,
+        uploadRoot
+      });
+
+      return res.status(403).json({ error: '非法文件路径' });
+    }
+
+    if (!fs.existsSync(resolvedFilePath)) {
       return res.status(404).json({ error: '文件不存在' });
     }
 
     // 验证文件哈希
-    const currentHash = calculateFileHash(data.file_path);
+    const currentHash = calculateFileHash(resolvedFilePath);
     if (currentHash !== data.file_hash) {
       logger.error(`文件完整性校验失败: data_id=${dataId}`);
       return res.status(500).json({ error: '文件完整性校验失败' });
@@ -852,13 +873,13 @@ router.get('/:id/download', optionalAuth, auditLog('data', 'download'), async (r
       [dataId]
     );
 
-    const downloadFilename = normalizeOriginalFilename(data.original_filename || path.basename(data.file_path));
+    const downloadFilename = normalizeOriginalFilename(data.original_filename || path.basename(resolvedFilePath));
 
     res.setHeader('Content-Type', 'application/octet-stream; charset=utf-8');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Content-Disposition', buildContentDisposition(downloadFilename));
 
-    return res.sendFile(path.resolve(data.file_path), (sendError) => {
+    return res.sendFile(resolvedFilePath, (sendError) => {
       if (sendError) {
         logger.error('发送下载文件失败:', sendError);
 

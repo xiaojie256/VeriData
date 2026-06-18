@@ -51,6 +51,7 @@ services:
       SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-604800}
       SETTINGS_ENCRYPTION_KEY: ${SETTINGS_ENCRYPTION_KEY:-}
       AI_SERVICE_URL: http://ai-service:5000
+      AI_INTERNAL_TOKEN: ${AI_INTERNAL_TOKEN:-VeriData_Internal_AI_Token_2024_Dev_Only}
       UPLOAD_PATH: /app/uploads
     ports:
       - "3000:3000"
@@ -76,8 +77,12 @@ services:
     environment:
       FLASK_ENV: production
       MODEL_PATH: /app/models
-    ports:
-      - "5000:5000"
+      UPLOAD_ROOT: /app/uploads
+      AI_INTERNAL_TOKEN: ${AI_INTERNAL_TOKEN:-VeriData_Internal_AI_Token_2024_Dev_Only}
+    # 注意：不要把 AI 服务暴露给宿主机。
+    # 后端通过 Docker 内部网络访问 http://ai-service:5000。
+    # ports:
+    #   - "5000:5000"
     volumes:
       - ./ai-service/models:/app/models
       - ./uploads:/app/uploads:ro

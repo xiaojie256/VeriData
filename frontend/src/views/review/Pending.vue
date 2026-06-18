@@ -294,6 +294,7 @@ import { useStore } from 'vuex'
 import { ElMessage } from 'element-plus'
 import dayjs from 'dayjs'
 import { api } from '../../store'
+import { downloadDataFile } from '../../utils/download'
 
 const store = useStore()
 const router = useRouter()
@@ -427,7 +428,7 @@ const openDataDetail = row => {
   router.push(`/data/${dataId}`)
 }
 
-const downloadData = row => {
+const downloadData = async row => {
   const dataId = row?.data_id || row?.id
 
   if (!dataId) {
@@ -435,14 +436,15 @@ const downloadData = row => {
     return
   }
 
-  const token = localStorage.getItem('token')
-
-  if (!token) {
-    ElMessage.warning('请先登录后再下载')
-    return
+  try {
+    await downloadDataFile(dataId, row?.original_filename || row?.title || 'download')
+  } catch (error) {
+    if (error?.response?.status === 401) {
+      ElMessage.warning('请先登录后再下载')
+    } else {
+      ElMessage.error('下载失败，请稍后重试')
+    }
   }
-
-  window.open(`/api/data/${dataId}/download?token=${encodeURIComponent(token)}`, '_blank')
 }
 
 const submitReview = async () => {

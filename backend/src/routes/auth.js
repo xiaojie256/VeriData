@@ -1,6 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 const {
   createLoginSession,
   destroyLoginSession,
@@ -75,8 +76,8 @@ router.post('/send-code', [
     const isLimited = await redisClient.get(rateLimitKey);
     if (isLimited) return res.status(429).json({ error: '验证码发送过于频繁，请1分钟后再试' });
 
-    // 生成6位随机数字验证码
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    // 生成6位随机数字验证码，使用密码学安全随机数
+    const code = String(crypto.randomInt(100000, 1000000));
 
     // 存入 Redis，有效期 5 分钟 (300秒)
     const redisKey = `mail_code:${email}:${type}`;

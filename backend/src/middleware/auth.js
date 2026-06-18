@@ -9,10 +9,10 @@ if (!JWT_SECRET) {
   throw new Error("JWT_SECRET 环境变量未设置");
 }
 
-// 验证JWT令牌（支持 Authorization header 和 query.token 两种方式）
+// 验证JWT令牌：只支持 Authorization header，不再支持 query.token
 const authenticate = async (req, res, next) => {
   try {
-    const token = req.headers.authorization?.split(" ")[1] || req.query.token;
+    const token = req.headers.authorization?.split(" ")[1];
 
     if (!token) {
       return res.status(401).json({ error: "未提供认证令牌" });
@@ -100,20 +100,14 @@ const authorize = (...roles) => {
 };
 
 // 可选认证（记录用户信息但不强制）
-// 支持两种来源：
-// 1. Authorization: Bearer xxx
-// 2. ?token=xxx，用于 window.open 下载文件场景
+// 只支持 Authorization header，不再支持 ?token=xxx，避免 JWT 出现在 URL 中
 const optionalAuth = async (req, res, next) => {
   try {
     const headerToken = req.headers.authorization?.startsWith("Bearer ")
       ? req.headers.authorization.split(" ")[1]
       : null;
 
-    const queryToken = Array.isArray(req.query.token)
-      ? req.query.token[0]
-      : req.query.token;
-
-    const token = headerToken || queryToken;
+    const token = headerToken;
 
     if (token) {
       const decoded = jwt.verify(token, JWT_SECRET);
