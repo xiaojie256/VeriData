@@ -341,7 +341,9 @@ const fetchData = async () => {
   loading.value = true
   try {
     let url = `/review/pending?page=${pagination.value.page}&limit=${pagination.value.limit}`
-    if (userRole.value !== 'admin') {
+    if (userRole.value === 'admin') {
+      url += '&review_type=admin'
+    } else {
       url += `&review_type=${userRole.value === 'teacher' ? 'teacher' : 'expert'}`
     }
     const response = await api.get(url)
