@@ -202,15 +202,23 @@ router.get(
            d.ai_check_status,
            d.ai_check_score,
            d.ai_anomaly_detected,
-           CASE WHEN r.is_blind_review = 1 THEN NULL ELSE u.username END AS submitter_name,
-           CASE WHEN r.is_blind_review = 1 THEN NULL ELSE u.real_name END AS submitter_real_name
+           CASE
+             WHEN ? = 'admin' THEN u.username
+             WHEN r.is_blind_review = 1 THEN NULL
+             ELSE u.username
+           END AS submitter_name,
+           CASE
+             WHEN ? = 'admin' THEN u.real_name
+             WHEN r.is_blind_review = 1 THEN NULL
+             ELSE u.real_name
+           END AS submitter_real_name
          FROM review_records r
          JOIN data_submissions d ON r.data_id = d.id
          LEFT JOIN users u ON d.submitter_id = u.id
          WHERE ${where.join(" AND ")}
          ORDER BY d.submitted_at ASC, r.created_at ASC
          LIMIT ? OFFSET ?`,
-        [...params, Number(limit), Number(offset)]
+        [req.user.role, req.user.role, ...params, Number(limit), Number(offset)]
       );
 
       const [countRows] = await pool.execute(

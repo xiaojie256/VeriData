@@ -20,7 +20,7 @@
         
         <el-table-column prop="submitter_name" label="提交者" width="120">
           <template #default="{ row }">
-            {{ row.submitter_real_name || row.submitter_name || '匿名' }}
+            {{ getSubmitterName(row) }}
           </template>
         </el-table-column>
         
@@ -103,6 +103,9 @@
           <el-descriptions :column="2">
             <el-descriptions-item label="标题">{{ currentReview.title }}</el-descriptions-item>
             <el-descriptions-item label="类型">{{ typeMap[currentReview.data_type] }}</el-descriptions-item>
+            <el-descriptions-item v-if="userRole === 'admin'" label="提交者" :span="2">
+              {{ getSubmitterName(currentReview) }}
+            </el-descriptions-item>
             <el-descriptions-item label="描述" :span="2">{{ currentReview.description || '暂无描述' }}</el-descriptions-item>
           </el-descriptions>
         </el-card>
@@ -307,6 +310,13 @@ const typeMap = {
 }
 
 const formatDate = (date) => dayjs(date).format('YYYY-MM-DD HH:mm')
+
+const getSubmitterName = (row) => {
+  const name = row?.submitter_real_name || row?.submitter_name
+  if (name) return name
+  // 管理员不属于盲审对象；如果这里还没有名字，说明后端没返回或用户记录异常，不应显示"匿名"
+  return userRole.value === 'admin' ? '未知用户' : '匿名'
+}
 
 const reviewTypeMap = {
   teacher: '导师一审',
