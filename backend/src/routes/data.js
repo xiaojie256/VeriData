@@ -883,7 +883,7 @@ router.post('/:id/ai-override-request', authenticate, async (req, res) => {
     const dataId = Number.parseInt(req.params.id, 10);
     const reason = String(req.body?.reason || '').trim();
 
-    if (!Number.isInteger(dataId) || dataId <= 0) {
+    if (!Number.isSafeInteger(dataId) || dataId <= 0) {
       await connection.rollback();
       return res.status(400).json({ error: '无效的数据ID' });
     }
@@ -984,7 +984,7 @@ router.post('/:id/ai-override', authenticate, authorize('admin'), async (req, re
     const decision = String(req.body?.decision || '').trim();
     const comments = String(req.body?.comments || '').trim();
 
-    if (!Number.isInteger(dataId) || dataId <= 0) {
+    if (!Number.isSafeInteger(dataId) || dataId <= 0) {
       await connection.rollback();
       return res.status(400).json({ error: '无效的数据ID' });
     }
@@ -1117,17 +1117,19 @@ router.post(
 
       const data = dataList[0];
 
-      if (data.submitter_id !== req.user.id) {
+      if (Number(data.submitter_id) !== Number(req.user.id)) {
         await connection.rollback();
-        return res.status(403).json({ error: '无权操作此数据' });
+
+        return res.status(403).json({
+          error: '只能由数据提交者本人提交审核；管理员可审核/管理数据，但不能在此处代替用户提交'
+        });
       }
 
-      // 检查 AI 检测状态：
-      // 1. pending/running：不能提交。
-      // 2. failed：不能直接提交，除非管理员已人工放行。
-      // 3. completed：允许提交，即使低分或0分，也交给人工审核并强提醒。
-      // 4. skipped：格式不支持AI检测，允许进入人工审核，但强提醒。
-      if (['student', 'civilian'].includes(req.user.role)) {
+      // AI提交门控：技术失败不能直接提交；低分/0分只提示风险，不阻断提交
+      // completed + ai_check_score = 0：允许提交，通过 aiReviewWarning 提醒审核人员
+      // failed + ai_manual_override_status = approved：允许提交，通过 aiReviewWarning 提醒审核人员
+      // failed + 未放行：不允许提交
+      {
         const aiStatus = data.ai_check_status || 'pending';
         const aiOverrideApproved = data.ai_manual_override_status === 'approved';
 
@@ -1143,7 +1145,7 @@ router.post(
           await connection.rollback();
 
           return res.status(400).json({
-            error: 'AI检测发生技术失败，不能直接提交。请先重新检测，或提交人工审核/管理员放行申请'
+            error: 'AI检测发生技术失败，不能直接提交。请先重新检测，或申请AI人工放行'
           });
         }
 

@@ -39,6 +39,7 @@ const markAiFailed = async (dataId, reason, extra = {}) => {
       buildAiResult({
         error: reason,
         failure_type: 'technical_failure',
+        score_available: false,
         ...extra
       }),
       dataId
