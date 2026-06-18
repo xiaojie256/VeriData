@@ -2,9 +2,17 @@ const express = require('express');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const { parse } = require('csv-parse/sync');
 const pool = require('../utils/database');
 const logger = require('../utils/logger');
 const { authenticate, authorize, optionalAuth } = require('../middleware/auth');
+const {
+  PUBLIC_REVIEW_STATUSES,
+  LIMITED_REVIEW_STATUSES,
+  normalizeUserIdList,
+  canAccessData,
+  canReviewData
+} = require('../utils/dataAccess');
 const { upload, handleUploadError, verifyFileIntegrity } = require('../middleware/upload');
 const { auditLog } = require('../middleware/audit');
 const { withTransaction } = require('../utils/transaction');
@@ -13,39 +21,49 @@ const { normalizeOriginalFilename, buildContentDisposition } = require('../utils
 const router = express.Router();
 const UPLOAD_PATH = process.env.UPLOAD_PATH || './uploads';
 
-// CSV 格式预检函数
+// CSV 格式预检函数：必须使用标准 CSV parser，不能用 split(',')，否则会误杀带引号逗号、引号换行的合法 CSV。
 const validateCsvFile = (filePath) => {
-  const content = fs.readFileSync(filePath, 'utf8')
-  const lines = content.split(/\r?\n/).filter(line => line.trim() !== '')
+  try {
+    const content = fs.readFileSync(filePath, 'utf8');
 
-  if (lines.length < 2) {
-    return { valid: false, reason: 'CSV至少需要包含表头和一行数据' }
-  }
+    const records = parse(content, {
+      bom: true,
+      columns: false,
+      skip_empty_lines: true,
+      relax_column_count: false,
+      relax_quotes: false,
+      trim: false
+    });
 
-  let quoteCount = 0
-  for (const char of content) {
-    if (char === '"') quoteCount++
-  }
+    if (records.length < 2) {
+      return { valid: false, reason: 'CSV至少需要包含表头和一行数据' };
+    }
 
-  if (quoteCount % 2 !== 0) {
-    return { valid: false, reason: 'CSV存在未闭合的双引号，请检查字段内容' }
-  }
+    const headerColumns = Array.isArray(records[0]) ? records[0].length : 0;
 
-  const headerColumns = lines[0].split(',').length
+    if (headerColumns <= 0) {
+      return { valid: false, reason: 'CSV表头不能为空' };
+    }
 
-  for (let i = 1; i < lines.length; i++) {
-    const currentColumns = lines[i].split(',').length
+    for (let i = 1; i < records.length; i += 1) {
+      const currentColumns = Array.isArray(records[i]) ? records[i].length : 0;
 
-    if (currentColumns !== headerColumns) {
-      return {
-        valid: false,
-        reason: `CSV第 ${i + 1} 行列数为 ${currentColumns}，与表头列数 ${headerColumns} 不一致`
+      if (currentColumns !== headerColumns) {
+        return {
+          valid: false,
+          reason: `CSV第 ${i + 1} 行列数为 ${currentColumns}，与表头列数 ${headerColumns} 不一致`
+        };
       }
     }
-  }
 
-  return { valid: true }
-}
+    return { valid: true };
+  } catch (error) {
+    return {
+      valid: false,
+      reason: `CSV格式解析失败：${error.message || '请检查引号、分隔符和换行'}`
+    };
+  }
+};
 
 // 计算文件哈希
 const calculateFileHash = (filePath) => {
@@ -108,106 +126,38 @@ const consumeQuota = async (userId, dataId, actionType = 'data_submit') => {
   );
 };
 
+const LOW_AI_SCORE_THRESHOLD = 60;
+
+const buildAiReviewWarning = (data) => {
+  if (!data) return '';
+
+  if (data.ai_check_status === 'failed' && data.ai_manual_override_status === 'approved') {
+    return '【AI提示】该数据曾发生AI技术检测失败，已由管理员人工放行，请审核人员重点人工核验。';
+  }
+
+  if (data.ai_check_status === 'skipped') {
+    return '【AI提示】该文件格式未参与自动AI检测，请审核人员进行人工核验。';
+  }
+
+  if (
+    data.ai_check_status === 'completed' &&
+    data.ai_check_score !== null &&
+    data.ai_check_score !== undefined &&
+    Number(data.ai_check_score) <= LOW_AI_SCORE_THRESHOLD
+  ) {
+    return `【AI风险提示】该数据AI评分较低（${data.ai_check_score}分），请审核人员重点关注真实性、完整性和异常项。`;
+  }
+
+  if (Number(data.ai_anomaly_detected) === 1) {
+    return '【AI风险提示】AI检测发现异常，请审核人员重点核验异常项。';
+  }
+
+  return '';
+};
+
 const VISIBILITY_VALUES = new Set(['private', 'limited', 'public']);
 
-// 公开数据允许展示的审核状态：
-// expert_approved：专家审核通过
-// final_approved：管理员终审通过
-const PUBLIC_REVIEW_STATUSES = ['expert_approved', 'final_approved'];
 const PUBLIC_REVIEW_STATUS_PLACEHOLDERS = PUBLIC_REVIEW_STATUSES.map(() => '?').join(', ');
-
-const LIMITED_REVIEW_STATUSES = ['final_approved'];
-
-const normalizeUserIdList = (value) => {
-  if (!value) return [];
-
-  let parsed = value;
-
-  if (typeof value === 'string') {
-    try {
-      parsed = JSON.parse(value);
-    } catch {
-      parsed = value.split(',');
-    }
-  }
-
-  if (!Array.isArray(parsed)) return [];
-
-  return [...new Set(
-    parsed
-      .map((item) => Number.parseInt(item, 10))
-      .filter((item) => Number.isSafeInteger(item) && item > 0)
-  )];
-};
-
-const isTeacherOfSubmitter = async (db, teacherId, submitterId) => {
-  const [relations] = await db.execute(
-    `SELECT id
-     FROM teacher_student_relations
-     WHERE teacher_id = ? AND student_id = ? AND status = 'active'
-     LIMIT 1`,
-    [teacherId, submitterId]
-  );
-
-  return relations.length > 0;
-};
-
-const canReviewData = async (db, user, data) => {
-  if (!user || !data) return false;
-
-  if (Number(data.submitter_id) === Number(user.id)) return true;
-  if (user.role === 'admin') return true;
-
-  const [reviews] = await db.execute(
-    `SELECT id
-     FROM review_records
-     WHERE data_id = ?
-       AND status = 'pending'
-       AND (
-         reviewer_id = ?
-         OR (reviewer_id IS NULL AND review_type = 'expert' AND ? = 'expert')
-         OR (reviewer_id IS NULL AND review_type = 'admin' AND ? = 'admin')
-       )
-     LIMIT 1`,
-    [data.id, user.id, user.role, user.role]
-  );
-
-  if (reviews.length > 0) return true;
-
-  if (user.role === 'teacher') {
-    return isTeacherOfSubmitter(db, user.id, data.submitter_id);
-  }
-
-  return false;
-};
-
-const canAccessData = async (db, user, data) => {
-  if (!data) return false;
-
-  if (
-    data.visibility === 'public' &&
-    PUBLIC_REVIEW_STATUSES.includes(data.review_status)
-  ) {
-    return true;
-  }
-
-  if (!user) return false;
-
-  if (await canReviewData(db, user, data)) {
-    return true;
-  }
-
-  if (
-    data.visibility === 'limited' &&
-    LIMITED_REVIEW_STATUSES.includes(data.review_status) &&
-    data.view_permission
-  ) {
-    const permissionList = normalizeUserIdList(data.view_permission);
-    return permissionList.includes(Number(user.id));
-  }
-
-  return false;
-};
 
 const REVIEW_TYPE_LABELS = {
   teacher: '导师一审',
@@ -679,7 +629,7 @@ router.get('/my', authenticate, async (req, res) => {
   }
 });
 
-// 获取公开数据列表：返回设置为公开，且已通过专家审核或管理员终审的数据
+// 获取公开数据列表：返回设置为公开，且已通过管理员终审的数据
 router.get('/public', optionalAuth, async (req, res) => {
   try {
     const pageNum = Math.max(Number.parseInt(req.query.page, 10) || 1, 1);
@@ -923,6 +873,197 @@ router.get('/:id/download', optionalAuth, auditLog('data', 'download'), async (r
   }
 });
 
+// 申请 AI 技术失败人工放行
+router.post('/:id/ai-override-request', authenticate, async (req, res) => {
+  const connection = await pool.getConnection();
+
+  try {
+    await connection.beginTransaction();
+
+    const dataId = Number.parseInt(req.params.id, 10);
+    const reason = String(req.body?.reason || '').trim();
+
+    if (!Number.isInteger(dataId) || dataId <= 0) {
+      await connection.rollback();
+      return res.status(400).json({ error: '无效的数据ID' });
+    }
+
+    const [dataList] = await connection.execute(
+      `SELECT id, submitter_id, title, review_status, ai_check_status, ai_manual_override_status
+       FROM data_submissions
+       WHERE id = ? AND deleted_at IS NULL
+       FOR UPDATE`,
+      [dataId]
+    );
+
+    if (dataList.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: '数据不存在' });
+    }
+
+    const data = dataList[0];
+
+    if (Number(data.submitter_id) !== Number(req.user.id)) {
+      await connection.rollback();
+      return res.status(403).json({ error: '只能由数据提交者本人申请人工放行' });
+    }
+
+    if (!['draft', 'teacher_rejected', 'expert_rejected', 'final_rejected'].includes(data.review_status)) {
+      await connection.rollback();
+      return res.status(409).json({ error: '当前数据状态不能申请AI人工放行' });
+    }
+
+    if (data.ai_check_status !== 'failed') {
+      await connection.rollback();
+      return res.status(400).json({ error: '只有AI技术检测失败的数据才需要申请人工放行' });
+    }
+
+    if (data.ai_manual_override_status === 'approved') {
+      await connection.rollback();
+      return res.status(409).json({ error: '该数据已被管理员放行，可直接提交审核' });
+    }
+
+    if (data.ai_manual_override_status === 'requested') {
+      await connection.rollback();
+      return res.status(409).json({ error: '已提交过人工放行申请，请等待管理员处理' });
+    }
+
+    await connection.execute(
+      `UPDATE data_submissions
+       SET ai_manual_override_status = 'requested',
+           ai_manual_override_reason = ?,
+           ai_manual_override_by = NULL,
+           ai_manual_override_at = NOW()
+       WHERE id = ?`,
+      [reason || '用户申请AI技术失败人工放行', dataId]
+    );
+
+    const [admins] = await connection.execute(
+      `SELECT id
+       FROM users
+       WHERE role = 'admin'
+         AND status = 'active'
+         AND deleted_at IS NULL`
+    );
+
+    for (const admin of admins) {
+      await connection.execute(
+        `INSERT INTO notifications (user_id, type, title, content, related_type, related_id)
+         VALUES (?, 'review', 'AI人工放行申请', ?, 'data', ?)`,
+        [
+          admin.id,
+          `用户 ${req.user.username} 的数据《${data.title}》AI检测发生技术失败，已申请人工审核/管理员放行。申请说明：${reason || '无'}`,
+          dataId
+        ]
+      );
+    }
+
+    await connection.commit();
+
+    res.json({
+      message: '已提交人工审核/管理员放行申请，请等待管理员处理',
+      ai_manual_override_status: 'requested'
+    });
+  } catch (error) {
+    await connection.rollback();
+    logger.error('申请AI人工放行失败:', error);
+    res.status(500).json({ error: '申请AI人工放行失败' });
+  } finally {
+    connection.release();
+  }
+});
+
+// 管理员处理 AI 技术失败人工放行
+router.post('/:id/ai-override', authenticate, authorize('admin'), async (req, res) => {
+  const connection = await pool.getConnection();
+
+  try {
+    await connection.beginTransaction();
+
+    const dataId = Number.parseInt(req.params.id, 10);
+    const decision = String(req.body?.decision || '').trim();
+    const comments = String(req.body?.comments || '').trim();
+
+    if (!Number.isInteger(dataId) || dataId <= 0) {
+      await connection.rollback();
+      return res.status(400).json({ error: '无效的数据ID' });
+    }
+
+    if (!['approved', 'rejected'].includes(decision)) {
+      await connection.rollback();
+      return res.status(400).json({ error: '处理结果只能是 approved 或 rejected' });
+    }
+
+    const [dataList] = await connection.execute(
+      `SELECT id, submitter_id, title, ai_check_status, ai_manual_override_status
+       FROM data_submissions
+       WHERE id = ? AND deleted_at IS NULL
+       FOR UPDATE`,
+      [dataId]
+    );
+
+    if (dataList.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: '数据不存在' });
+    }
+
+    const data = dataList[0];
+
+    if (data.ai_check_status !== 'failed') {
+      await connection.rollback();
+      return res.status(400).json({ error: '只有AI技术检测失败的数据才需要人工放行' });
+    }
+
+    if (data.ai_manual_override_status !== 'requested') {
+      await connection.rollback();
+      return res.status(409).json({ error: '当前数据没有待处理的AI人工放行申请' });
+    }
+
+    const nextStatus = decision === 'approved' ? 'approved' : 'rejected';
+
+    await connection.execute(
+      `UPDATE data_submissions
+       SET ai_manual_override_status = ?,
+           ai_manual_override_reason = ?,
+           ai_manual_override_by = ?,
+           ai_manual_override_at = NOW()
+       WHERE id = ?`,
+      [
+        nextStatus,
+        comments || (decision === 'approved' ? '管理员已人工放行' : '管理员拒绝人工放行'),
+        req.user.id,
+        dataId
+      ]
+    );
+
+    await connection.execute(
+      `INSERT INTO notifications (user_id, type, title, content, related_type, related_id)
+       VALUES (?, 'review', ?, ?, 'data', ?)`,
+      [
+        data.submitter_id,
+        decision === 'approved' ? 'AI人工放行已通过' : 'AI人工放行未通过',
+        decision === 'approved'
+          ? `您的数据《${data.title}》AI人工放行申请已通过，可继续提交审核。${comments ? `处理意见：${comments}` : ''}`
+          : `您的数据《${data.title}》AI人工放行申请未通过，请重新检测或修改数据后再试。${comments ? `处理意见：${comments}` : ''}`,
+        dataId
+      ]
+    );
+
+    await connection.commit();
+
+    res.json({
+      message: decision === 'approved' ? '已批准AI人工放行' : '已拒绝AI人工放行',
+      ai_manual_override_status: nextStatus
+    });
+  } catch (error) {
+    await connection.rollback();
+    logger.error('处理AI人工放行失败:', error);
+    res.status(500).json({ error: '处理AI人工放行失败' });
+  } finally {
+    connection.release();
+  }
+});
+
 // 提交审核
 router.post(
   '/:id/submit',
@@ -952,7 +1093,17 @@ router.post(
       await connection.beginTransaction();
 
       const [dataList] = await connection.execute(
-        `SELECT id, submitter_id, title, review_status, ai_check_status
+        `SELECT id,
+                submitter_id,
+                title,
+                review_status,
+                ai_check_status,
+                ai_check_score,
+                ai_anomaly_detected,
+                ai_manual_override_status,
+                data_format,
+                visibility,
+                view_permission
          FROM data_submissions
          WHERE id = ? AND deleted_at IS NULL
          FOR UPDATE`,
@@ -971,13 +1122,41 @@ router.post(
         return res.status(403).json({ error: '无权操作此数据' });
       }
 
-      // 检查 AI 检测状态，学生和普通账号必须通过 AI 检测才能提交审核
-      if (['student', 'civilian'].includes(req.user.role) && data.ai_check_status !== 'completed') {
-        await connection.rollback();
-        return res.status(400).json({
-          error: 'AI检测未完成或检测失败，暂不能提交审核'
-        });
+      // 检查 AI 检测状态：
+      // 1. pending/running：不能提交。
+      // 2. failed：不能直接提交，除非管理员已人工放行。
+      // 3. completed：允许提交，即使低分或0分，也交给人工审核并强提醒。
+      // 4. skipped：格式不支持AI检测，允许进入人工审核，但强提醒。
+      if (['student', 'civilian'].includes(req.user.role)) {
+        const aiStatus = data.ai_check_status || 'pending';
+        const aiOverrideApproved = data.ai_manual_override_status === 'approved';
+
+        if (['pending', 'running'].includes(aiStatus)) {
+          await connection.rollback();
+
+          return res.status(400).json({
+            error: 'AI检测尚未完成，请等待检测结束后再提交审核'
+          });
+        }
+
+        if (aiStatus === 'failed' && !aiOverrideApproved) {
+          await connection.rollback();
+
+          return res.status(400).json({
+            error: 'AI检测发生技术失败，不能直接提交。请先重新检测，或提交人工审核/管理员放行申请'
+          });
+        }
+
+        if (!['completed', 'skipped', 'failed'].includes(aiStatus)) {
+          await connection.rollback();
+
+          return res.status(400).json({
+            error: 'AI检测状态异常，暂不能提交审核'
+          });
+        }
       }
+
+      const aiReviewWarning = buildAiReviewWarning(data);
 
       const allowedStatuses = ['draft', 'teacher_rejected', 'expert_rejected', 'final_rejected'];
 
@@ -1049,7 +1228,7 @@ router.post(
            VALUES (?, 'review', '新的导师审核任务', ?, 'data', ?)`,
           [
             teacherId,
-            `学生 ${req.user.real_name || req.user.username} 提交了数据《${data.title}》，请进行导师一审。`,
+            `学生 ${req.user.real_name || req.user.username} 提交了数据《${data.title}》，请进行导师一审。${aiReviewWarning ? `\n\n${aiReviewWarning}` : ''}`,
             dataId
           ]
         );
@@ -1090,7 +1269,7 @@ router.post(
              AND status = 'active'
              AND deleted_at IS NULL`,
           [
-            `普通账号 ${req.user.real_name || req.user.username} 提交了数据《${data.title}》，请进行专家审核。`,
+            `普通账号 ${req.user.real_name || req.user.username} 提交了数据《${data.title}》，请进行专家审核。${aiReviewWarning ? `\n\n${aiReviewWarning}` : ''}`,
             dataId
           ]
         );
@@ -1129,7 +1308,7 @@ router.post(
            AND status = 'active'
            AND deleted_at IS NULL`,
         [
-          `用户 ${req.user.real_name || req.user.username} 提交了数据《${data.title}》，请进行管理员最终审核。`,
+          `用户 ${req.user.real_name || req.user.username} 提交了数据《${data.title}》，请进行管理员最终审核。${aiReviewWarning ? `\n\n${aiReviewWarning}` : ''}`,
           dataId
         ]
       );

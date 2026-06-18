@@ -4,8 +4,12 @@ const fs = require('fs');
 const path = require('path');
 const pool = require('../utils/database');
 const logger = require('../utils/logger');
-const { authenticate, authorize } = require('../middleware/auth');
+const { authenticate, authorize, optionalAuth } = require('../middleware/auth');
 const { getAiConfig, getRuntimeAiReviewConfig } = require('../utils/aiConfig');
+const {
+  canAccessData,
+  canReviewData
+} = require('../utils/dataAccess');
 
 const router = express.Router();
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL || 'http://localhost:5000';
@@ -25,36 +29,46 @@ const markAiFailed = async (dataId, reason, extra = {}) => {
      SET ai_check_status = 'failed',
          ai_check_result = ?,
          ai_check_score = NULL,
-         ai_anomaly_detected = 0
+         ai_anomaly_detected = 0,
+         ai_manual_override_status = 'none',
+         ai_manual_override_reason = NULL,
+         ai_manual_override_by = NULL,
+         ai_manual_override_at = NULL
      WHERE id = ?`,
     [
       buildAiResult({
         error: reason,
+        failure_type: 'technical_failure',
         ...extra
       }),
       dataId
     ]
-  )
-}
+  );
+};
 
 const markAiSkipped = async (dataId, reason, extra = {}) => {
   await pool.execute(
     `UPDATE data_submissions
-     SET ai_check_status = 'completed',
+     SET ai_check_status = 'skipped',
          ai_check_result = ?,
          ai_check_score = NULL,
-         ai_anomaly_detected = 0
+         ai_anomaly_detected = 0,
+         ai_manual_override_status = 'none',
+         ai_manual_override_reason = NULL,
+         ai_manual_override_by = NULL,
+         ai_manual_override_at = NULL
      WHERE id = ?`,
     [
       buildAiResult({
         skipped: true,
+        classification: 'not_supported',
         reason,
         ...extra
       }),
       dataId
     ]
-  )
-}
+  );
+};
 
 const normalizeAiResponse = (result) => {
   return buildAiResult({
@@ -92,7 +106,11 @@ const runAiAnalysis = async (dataId, data, llmConfig) => {
        SET ai_check_status = 'completed',
            ai_check_score = ?,
            ai_check_result = ?,
-           ai_anomaly_detected = ?
+           ai_anomaly_detected = ?,
+           ai_manual_override_status = 'none',
+           ai_manual_override_reason = NULL,
+           ai_manual_override_by = NULL,
+           ai_manual_override_at = NULL
        WHERE id = ?`,
       [
         result.score ?? null,
@@ -142,7 +160,16 @@ router.post('/analyze/:dataId', authenticate, async (req, res) => {
 
   try {
     const [dataList] = await pool.execute(
-      `SELECT id, submitter_id, title, file_path, file_hash, data_format, ai_check_status
+      `SELECT id,
+              submitter_id,
+              title,
+              file_path,
+              file_hash,
+              data_format,
+              ai_check_status,
+              visibility,
+              view_permission,
+              review_status
        FROM data_submissions
        WHERE id = ? AND deleted_at IS NULL`,
       [dataId]
@@ -156,14 +183,12 @@ router.post('/analyze/:dataId', authenticate, async (req, res) => {
 
     const data = dataList[0]
 
-    const canAnalyze =
-      Number(data.submitter_id) === Number(req.user.id) ||
-      ['admin', 'teacher', 'expert'].includes(req.user.role)
+    const canAnalyze = await canReviewData(pool, req.user, data);
 
     if (!canAnalyze) {
       return res.status(403).json({
-        error: '权限不足'
-      })
+        error: '无权对该数据触发AI检测'
+      });
     }
 
     if (data.ai_check_status === 'running') {
@@ -190,8 +215,8 @@ router.post('/analyze/:dataId', authenticate, async (req, res) => {
       })
 
       return res.status(200).json({
-        message: '当前文件类型暂不支持自动AI检测，已跳过',
-        status: 'completed',
+        message: '当前文件类型暂不支持自动AI检测，已标记为未参与自动检测',
+        status: 'skipped',
         skipped: true,
         supported_extensions: Array.from(AI_SUPPORTED_EXTENSIONS)
       })
@@ -214,7 +239,13 @@ router.post('/analyze/:dataId', authenticate, async (req, res) => {
     await pool.execute(
       `UPDATE data_submissions
        SET ai_check_status = 'running',
-           ai_check_result = NULL
+           ai_check_result = NULL,
+           ai_check_score = NULL,
+           ai_anomaly_detected = 0,
+           ai_manual_override_status = 'none',
+           ai_manual_override_reason = NULL,
+           ai_manual_override_by = NULL,
+           ai_manual_override_at = NULL
        WHERE id = ?`,
       [dataId]
     )
@@ -259,12 +290,28 @@ router.post('/analyze/:dataId', authenticate, async (req, res) => {
 });
 
 // 获取AI检测结果
-router.get('/result/:dataId', authenticate, async (req, res) => {
+router.get('/result/:dataId', optionalAuth, async (req, res) => {
   try {
-    const dataId = req.params.dataId;
+    const dataId = Number(req.params.dataId);
+
+    if (!Number.isSafeInteger(dataId) || dataId <= 0) {
+      return res.status(400).json({ error: '无效的数据ID' });
+    }
 
     const [dataList] = await pool.execute(
-      'SELECT ai_check_status, ai_check_result, ai_check_score, ai_anomaly_detected FROM data_submissions WHERE id = ?',
+      `SELECT id,
+              submitter_id,
+              visibility,
+              view_permission,
+              review_status,
+              ai_check_status,
+              ai_check_result,
+              ai_check_score,
+              ai_anomaly_detected,
+              ai_manual_override_status,
+              ai_manual_override_reason
+       FROM data_submissions
+       WHERE id = ? AND deleted_at IS NULL`,
       [dataId]
     );
 
@@ -273,12 +320,27 @@ router.get('/result/:dataId', authenticate, async (req, res) => {
     }
 
     const data = dataList[0];
+    const hasPermission = await canAccessData(pool, req.user, data);
+
+    if (!hasPermission) {
+      return res.status(403).json({ error: '无权查看该数据的AI检测结果' });
+    }
+
+    let details = null;
+
+    try {
+      details = data.ai_check_result ? JSON.parse(data.ai_check_result) : null;
+    } catch {
+      details = { raw: data.ai_check_result };
+    }
 
     res.json({
       status: data.ai_check_status,
       score: data.ai_check_score,
       has_anomaly: data.ai_anomaly_detected === 1,
-      details: data.ai_check_result ? JSON.parse(data.ai_check_result) : null
+      manual_override_status: data.ai_manual_override_status,
+      manual_override_reason: data.ai_manual_override_reason,
+      details
     });
   } catch (error) {
     logger.error('获取AI结果失败:', error);

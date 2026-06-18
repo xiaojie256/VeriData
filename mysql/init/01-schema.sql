@@ -67,7 +67,7 @@ CREATE TABLE data_submissions (
   title VARCHAR(200) NOT NULL COMMENT '数据标题',
   description TEXT COMMENT '数据描述',
   data_type ENUM('raw', 'processed', 'analysis', 'summary') NOT NULL DEFAULT 'raw',
-  data_format ENUM('csv', 'excel', 'json', 'txt', 'pdf', 'image', 'other') NOT NULL,
+  data_format ENUM('csv', 'excel', 'json', 'txt', 'pdf', 'word', 'archive', 'image', 'other') NOT NULL,
   file_path VARCHAR(500) NOT NULL COMMENT '文件存储路径',
   file_size BIGINT UNSIGNED DEFAULT 0 COMMENT '文件大小（字节）',
   file_hash VARCHAR(64) NOT NULL COMMENT '文件哈希值（SHA256）',
@@ -82,10 +82,14 @@ CREATE TABLE data_submissions (
   review_progress INT DEFAULT 0 COMMENT '审核进度百分比',
   
   -- AI检测结果
-  ai_check_status ENUM('pending', 'running', 'completed', 'failed') DEFAULT 'pending',
+  ai_check_status ENUM('pending', 'running', 'completed', 'failed', 'skipped') DEFAULT 'pending',
   ai_check_result JSON DEFAULT NULL,
   ai_check_score DECIMAL(5,2) DEFAULT NULL COMMENT 'AI可信度评分',
   ai_anomaly_detected TINYINT(1) DEFAULT 0,
+  ai_manual_override_status ENUM('none', 'requested', 'approved', 'rejected') NOT NULL DEFAULT 'none' COMMENT 'AI技术失败人工放行状态',
+  ai_manual_override_reason TEXT DEFAULT NULL COMMENT 'AI人工放行申请/审批说明',
+  ai_manual_override_by BIGINT UNSIGNED DEFAULT NULL COMMENT 'AI人工放行审批管理员ID',
+  ai_manual_override_at DATETIME DEFAULT NULL COMMENT 'AI人工放行更新时间',
   
   -- 责任声明
   liability_statement TEXT COMMENT '责任声明内容',
@@ -109,6 +113,7 @@ CREATE TABLE data_submissions (
   INDEX idx_status (review_status),
   INDEX idx_visibility (visibility),
   INDEX idx_data_type (data_type),
+  INDEX idx_ai_manual_override (ai_manual_override_status),
   FOREIGN KEY (submitter_id) REFERENCES users(id) ON DELETE CASCADE,
   FOREIGN KEY (parent_id) REFERENCES data_submissions(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='数据提交表';

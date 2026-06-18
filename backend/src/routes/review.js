@@ -202,6 +202,8 @@ router.get(
            d.ai_check_status,
            d.ai_check_score,
            d.ai_anomaly_detected,
+           d.ai_check_result,
+           d.ai_manual_override_status,
            CASE
              WHEN ? = 'admin' THEN u.username
              WHEN r.is_blind_review = 1 THEN NULL
@@ -246,30 +248,89 @@ router.get(
   }
 );
 
-// 获取审核历史
-router.get("/history", authenticate, async (req, res) => {
+// 获取审核历史：普通审核人员只看自己的历史；管理员默认看全局历史
+router.get("/history", authenticate, authorize("teacher", "expert", "admin"), async (req, res) => {
   try {
-    if (!req.user || !req.user.id) {
-      return res.status(401).json({ error: "用户未认证" });
-    }
-
-    const userId = req.user.id;
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
+    const page = Math.max(Number.parseInt(req.query.page, 10) || 1, 1);
+    const limit = Math.min(Math.max(Number.parseInt(req.query.limit, 10) || 10, 1), 100);
     const offset = (page - 1) * limit;
 
+    const reviewType = String(req.query.review_type || "").trim();
+    const status = String(req.query.status || "").trim();
+    const reviewerId = Number.parseInt(req.query.reviewer_id, 10);
+
+    if (reviewType && !["teacher", "expert", "admin"].includes(reviewType)) {
+      return res.status(400).json({ error: "无效的审核类型" });
+    }
+
+    if (status && !["approved", "rejected", "revision_required"].includes(status)) {
+      return res.status(400).json({ error: "无效的审核状态" });
+    }
+
+    const where = ["r.status != 'pending'", "d.deleted_at IS NULL"];
+    const params = [];
+
+    if (req.user.role !== "admin") {
+      where.push("r.reviewer_id = ?");
+      params.push(req.user.id);
+    } else if (Number.isSafeInteger(reviewerId) && reviewerId > 0) {
+      where.push("r.reviewer_id = ?");
+      params.push(reviewerId);
+    }
+
+    if (reviewType) {
+      where.push("r.review_type = ?");
+      params.push(reviewType);
+    }
+
+    if (status) {
+      where.push("r.status = ?");
+      params.push(status);
+    }
+
     const [reviews] = await pool.query(
-      `SELECT r.id, r.data_id, r.review_type, r.status, r.overall_score, r.completed_at,
-              d.title, r.comments, r.ai_assisted
+      `SELECT
+         r.id,
+         r.data_id,
+         r.review_type,
+         r.status,
+         r.overall_score,
+         r.completed_at,
+         r.comments,
+         r.ai_assisted,
+         r.reviewer_id,
+         d.title,
+         d.review_status,
+         d.ai_check_status,
+         d.ai_check_score,
+         d.ai_anomaly_detected,
+         u.username AS reviewer_name,
+         u.real_name AS reviewer_real_name
        FROM review_records r
        JOIN data_submissions d ON r.data_id = d.id
-       WHERE r.reviewer_id = ? AND r.status != 'pending'
-       ORDER BY r.completed_at DESC
+       LEFT JOIN users u ON r.reviewer_id = u.id
+       WHERE ${where.join(" AND ")}
+       ORDER BY r.completed_at DESC, r.updated_at DESC
        LIMIT ? OFFSET ?`,
-      [userId, limit, offset],
+      [...params, limit, offset]
     );
 
-    res.json({ reviews });
+    const [countRows] = await pool.query(
+      `SELECT COUNT(*) AS total
+       FROM review_records r
+       JOIN data_submissions d ON r.data_id = d.id
+       WHERE ${where.join(" AND ")}`,
+      params
+    );
+
+    res.json({
+      reviews,
+      pagination: {
+        page,
+        limit,
+        total: countRows[0].total
+      }
+    });
   } catch (error) {
     logger.error("获取审核历史失败:", error);
     res.status(500).json({ error: "获取审核历史失败" });
@@ -778,7 +839,7 @@ router.get(
       const dataId = req.params.id;
 
       const [dataList] = await pool.execute(
-        `SELECT id, submitter_id, review_status, ai_check_result, ai_check_score, ai_anomaly_detected
+        `SELECT id, submitter_id, review_status, ai_check_status, ai_check_result, ai_check_score, ai_anomaly_detected, ai_manual_override_status
          FROM data_submissions
          WHERE id = ? AND deleted_at IS NULL`,
         [dataId]
@@ -821,8 +882,13 @@ router.get(
         logger.error("解析AI检查结果失败:", e);
       }
       res.json({
+        status: data.ai_check_status,
         score: data.ai_check_score,
         has_anomaly: data.ai_anomaly_detected === 1,
+        skipped: rawResult.skipped === true || data.ai_check_status === 'skipped',
+        failure_type: rawResult.failure_type || null,
+        reason: rawResult.reason || rawResult.error || null,
+        manual_override_status: data.ai_manual_override_status || 'none',
         anomalies: rawResult.anomaly_detection?.anomalies || [],
         llm_insight: rawResult.llm_insight || "该数据集尚无大模型审计报告。",
       });

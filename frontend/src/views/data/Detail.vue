@@ -82,6 +82,7 @@
                 <el-tag v-if="data?.ai_check_status === 'completed'" type="success">已完成</el-tag>
                 <el-tag v-else-if="data?.ai_check_status === 'running'" type="warning">检测中</el-tag>
                 <el-tag v-else-if="data?.ai_check_status === 'failed'" type="danger">检测失败</el-tag>
+                <el-tag v-else-if="data?.ai_check_status === 'skipped'" type="info">未参与自动检测</el-tag>
                 <el-tag v-else type="info">待检测</el-tag>
 
                 <el-button
@@ -292,14 +293,63 @@
               </template>
             </el-alert>
 
-            <el-button
-              v-if="canTriggerAiCheck"
-              type="primary"
-              :loading="aiRetryLoading"
-              @click="triggerAiAnalysis"
-            >
-              重新检测
-            </el-button>
+            <div class="ai-failed-actions">
+              <el-button
+                v-if="canTriggerAiCheck"
+                type="primary"
+                :loading="aiRetryLoading"
+                @click="triggerAiAnalysis"
+              >
+                重新检测
+              </el-button>
+
+              <el-button
+                v-if="canRequestAiOverride"
+                type="warning"
+                :loading="aiOverrideLoading"
+                @click="requestAiOverride"
+              >
+                申请人工审核/管理员放行
+              </el-button>
+
+              <el-tag
+                v-if="data?.ai_manual_override_status === 'requested'"
+                type="warning"
+              >
+                已申请人工放行，等待管理员处理
+              </el-tag>
+
+              <el-tag
+                v-if="data?.ai_manual_override_status === 'approved'"
+                type="success"
+              >
+                管理员已放行，可提交审核
+              </el-tag>
+
+              <el-tag
+                v-if="data?.ai_manual_override_status === 'rejected'"
+                type="danger"
+              >
+                管理员已拒绝放行
+              </el-tag>
+
+              <template v-if="canHandleAiOverride">
+                <el-button
+                  type="success"
+                  :loading="aiOverrideLoading"
+                  @click="handleAiOverride('approved')"
+                >
+                  批准放行
+                </el-button>
+                <el-button
+                  type="danger"
+                  :loading="aiOverrideLoading"
+                  @click="handleAiOverride('rejected')"
+                >
+                  拒绝放行
+                </el-button>
+              </template>
+            </div>
           </template>
 
           <template v-else-if="data?.ai_check_status === 'running'">
@@ -398,7 +448,39 @@
         
         <!-- 操作按钮 -->
         <el-card class="detail-card" v-if="canSubmit">
-          <el-button type="primary" @click="showSubmitDialog" class="w-full">
+          <el-alert
+            v-if="data?.ai_check_status === 'failed' && data?.ai_manual_override_status !== 'approved'"
+            type="error"
+            show-icon
+            :closable="false"
+            title="AI检测发生技术失败，不能直接提交。请先重新检测，或申请人工审核/管理员放行。"
+            style="margin-bottom: 12px;"
+          />
+
+          <el-alert
+            v-else-if="data?.ai_check_status === 'skipped'"
+            type="info"
+            show-icon
+            :closable="false"
+            title="该文件格式未参与自动AI检测，提交后将进入人工审核。"
+            style="margin-bottom: 12px;"
+          />
+
+          <el-alert
+            v-else-if="isAiLowScore"
+            type="warning"
+            show-icon
+            :closable="false"
+            title="AI评分较低，但不会阻止提交。审核人员将收到风险提示。"
+            style="margin-bottom: 12px;"
+          />
+
+          <el-button
+            type="primary"
+            @click="showSubmitDialog"
+            class="w-full"
+            :disabled="isAiSubmitBlocked"
+          >
             提交审核
           </el-button>
         </el-card>
@@ -464,7 +546,7 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowLeft, Download } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 import { api } from '../../store'
@@ -481,6 +563,7 @@ const teacher = ref(null)
 const teacherLoading = ref(false)
 const submitLoading = ref(false)
 const aiRetryLoading = ref(false)
+const aiOverrideLoading = ref(false)
 
 const AI_POLLING_STATUSES = new Set(['pending', 'queued', 'running'])
 let aiPollingTimer = null
@@ -534,6 +617,51 @@ const canTriggerAiCheck = computed(() => {
   const role = currentUserRole.value
   return ['admin', 'teacher', 'expert'].includes(role) ||
     Number(data.value.submitter_id) === Number(currentUser.value?.id)
+})
+
+const isSubmitter = computed(() => {
+  return Number(data.value?.submitter_id) === Number(currentUser.value?.id)
+})
+
+const canRequestAiOverride = computed(() => {
+  return Boolean(
+    data.value &&
+    isSubmitter.value &&
+    data.value.ai_check_status === 'failed' &&
+    ['none', 'rejected', null, undefined].includes(data.value.ai_manual_override_status) &&
+    ['draft', 'teacher_rejected', 'expert_rejected', 'final_rejected'].includes(data.value.review_status)
+  )
+})
+
+const canHandleAiOverride = computed(() => {
+  return Boolean(
+    data.value &&
+    currentUserRole.value === 'admin' &&
+    data.value.ai_check_status === 'failed' &&
+    data.value.ai_manual_override_status === 'requested'
+  )
+})
+
+const isAiLowScore = computed(() => {
+  return Boolean(
+    data.value &&
+    data.value.ai_check_status === 'completed' &&
+    data.value.ai_check_score !== null &&
+    data.value.ai_check_score !== undefined &&
+    Number(data.value.ai_check_score) <= 60
+  )
+})
+
+const isAiSubmitBlocked = computed(() => {
+  if (!data.value || !['student', 'civilian'].includes(currentUserRole.value)) return false
+
+  const status = data.value.ai_check_status
+
+  if (['pending', 'running'].includes(status)) return true
+
+  if (status === 'failed' && data.value.ai_manual_override_status !== 'approved') return true
+
+  return false
 })
 
 const statusMap = {
@@ -649,9 +777,14 @@ const aiStatusText = computed(() => {
     return `评分: ${data.value.ai_check_score ?? '-'}`
   }
 
+  if (data.value.ai_check_status === 'skipped') return '未参与自动检测，进入人工审核'
   if (data.value.ai_check_status === 'running') return '检测中'
 
-  if (data.value.ai_check_status === 'failed') return '检测失败，可重新检测'
+  if (data.value.ai_check_status === 'failed') {
+    if (data.value.ai_manual_override_status === 'approved') return '检测失败，管理员已放行'
+    if (data.value.ai_manual_override_status === 'requested') return '检测失败，等待管理员放行'
+    return '检测失败，可重新检测或申请人工放行'
+  }
 
   return '待检测'
 })
@@ -830,6 +963,71 @@ const triggerAiAnalysis = async () => {
   }
 }
 
+const requestAiOverride = async () => {
+  aiOverrideLoading.value = true
+
+  try {
+    const { value } = await ElMessageBox.prompt(
+      '请填写申请说明，例如：AI服务调用失败、文件格式特殊但数据真实等。',
+      '申请人工审核/管理员放行',
+      {
+        confirmButtonText: '提交申请',
+        cancelButtonText: '取消',
+        inputType: 'textarea',
+        inputPlaceholder: '请输入申请说明',
+        inputValue: aiFailureReason.value || ''
+      }
+    )
+
+    const result = await api.post(`/data/${route.params.id}/ai-override-request`, {
+      reason: value || ''
+    })
+
+    ElMessage.success(result?.message || '已提交人工放行申请')
+    await fetchData()
+  } catch (err) {
+    if (err === 'cancel' || err?.action === 'cancel') return
+    ElMessage.error(err?.error || '提交人工放行申请失败')
+  } finally {
+    aiOverrideLoading.value = false
+  }
+}
+
+const handleAiOverride = async (decision) => {
+  aiOverrideLoading.value = true
+
+  try {
+    const title = decision === 'approved' ? '批准AI人工放行' : '拒绝AI人工放行'
+    const placeholder = decision === 'approved'
+      ? '请填写批准说明，可留空'
+      : '请填写拒绝原因'
+
+    const { value } = await ElMessageBox.prompt(
+      placeholder,
+      title,
+      {
+        confirmButtonText: '确认',
+        cancelButtonText: '取消',
+        inputType: 'textarea',
+        inputPlaceholder: placeholder
+      }
+    )
+
+    const result = await api.post(`/data/${route.params.id}/ai-override`, {
+      decision,
+      comments: value || ''
+    })
+
+    ElMessage.success(result?.message || '处理成功')
+    await fetchData()
+  } catch (err) {
+    if (err === 'cancel' || err?.action === 'cancel') return
+    ElMessage.error(err?.error || '处理AI人工放行失败')
+  } finally {
+    aiOverrideLoading.value = false
+  }
+}
+
 const fetchReviewRecords = async () => {
   reviewRecords.value = data.value?.review_chain || data.value?.prior_reviews || []
 }
@@ -846,10 +1044,18 @@ const downloadData = () => {
 }
 
 const showSubmitDialog = async () => {
-  // 检查 AI 检测状态，学生和普通账号必须通过 AI 检测才能提交
-  if (data.value && ['student', 'civilian'].includes(currentUserRole.value) && data.value.ai_check_status !== 'completed') {
-    ElMessage.warning('AI检测未通过或尚未完成，暂不能提交审核。请先完成AI检测。')
-    return
+  if (data.value && ['student', 'civilian'].includes(currentUserRole.value)) {
+    const status = data.value.ai_check_status
+
+    if (['pending', 'running'].includes(status)) {
+      ElMessage.warning('AI检测尚未完成，请等待检测结束后再提交审核。')
+      return
+    }
+
+    if (status === 'failed' && data.value.ai_manual_override_status !== 'approved') {
+      ElMessage.warning('AI检测发生技术失败，不能直接提交。请先重新检测，或申请人工审核/管理员放行。')
+      return
+    }
   }
 
   submitDialogVisible.value = true
@@ -1025,5 +1231,12 @@ onBeforeUnmount(() => {
 .visible-user-tag {
   margin-right: 8px;
   margin-bottom: 6px;
+}
+
+.ai-failed-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
 }
 </style>

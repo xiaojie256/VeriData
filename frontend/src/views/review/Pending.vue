@@ -42,7 +42,11 @@
         <el-table-column prop="ai_anomaly_detected" label="AI异常" width="100">
           <template #default="{ row }">
             <el-tag v-if="row.ai_anomaly_detected === 1" type="danger" size="small">有异常</el-tag>
+            <el-tag v-else-if="row.ai_check_status === 'completed' && Number(row.ai_check_score) <= 60" type="warning" size="small">低分风险</el-tag>
             <el-tag v-else-if="row.ai_check_status === 'completed'" type="success" size="small">正常</el-tag>
+            <el-tag v-else-if="row.ai_check_status === 'skipped'" type="info" size="small">未检测</el-tag>
+            <el-tag v-else-if="row.ai_check_status === 'failed' && row.ai_manual_override_status === 'approved'" type="warning" size="small">已放行</el-tag>
+            <el-tag v-else-if="row.ai_check_status === 'failed'" type="danger" size="small">检测失败</el-tag>
             <span v-else>检测中</span>
           </template>
         </el-table-column>
@@ -202,6 +206,34 @@
           show-icon
           :closable="false"
           title="暂无前序审核结果"
+        />
+
+        <!-- AI 风险提醒 -->
+        <el-alert
+          v-if="currentReview?.ai_check_status === 'skipped'"
+          type="info"
+          show-icon
+          :closable="false"
+          title="该文件格式未参与自动AI检测，请进行人工核验。"
+          style="margin-bottom: 12px;"
+        />
+
+        <el-alert
+          v-else-if="currentReview?.ai_check_status === 'failed' && currentReview?.ai_manual_override_status === 'approved'"
+          type="warning"
+          show-icon
+          :closable="false"
+          title="该数据曾发生AI技术检测失败，已由管理员人工放行，请重点核验。"
+          style="margin-bottom: 12px;"
+        />
+
+        <el-alert
+          v-else-if="currentReview?.ai_check_status === 'completed' && Number(currentReview?.ai_check_score) <= 60"
+          type="warning"
+          show-icon
+          :closable="false"
+          :title="`AI评分较低（${currentReview?.ai_check_score ?? 0}分），请重点核验真实性、完整性和异常项。`"
+          style="margin-bottom: 12px;"
         />
 
         <!-- 评分表单 -->

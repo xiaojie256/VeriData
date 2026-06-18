@@ -7,6 +7,12 @@
     <el-card>
       <el-table :data="reviewList" v-loading="loading" style="width: 100%">
         <el-table-column prop="title" label="数据标题" min-width="200" />
+
+        <el-table-column label="审核人" min-width="140">
+          <template #default="{ row }">
+            {{ row.reviewer_real_name || row.reviewer_name || '-' }}
+          </template>
+        </el-table-column>
         
         <el-table-column prop="review_type" label="审核类型" width="100">
           <template #default="{ row }">
@@ -101,8 +107,8 @@ const fetchData = async () => {
   loading.value = true
   try {
     const response = await api.get(`/review/history?page=${pagination.value.page}&limit=${pagination.value.limit}`)
-    reviewList.value = response.reviews
-    pagination.value.total = response.reviews.length
+    reviewList.value = response.reviews || []
+    pagination.value.total = response.pagination?.total ?? reviewList.value.length
   } catch (error) {
     ElMessage.error('获取审核历史失败')
   } finally {
