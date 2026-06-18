@@ -75,11 +75,19 @@
     <el-card v-if="showReviewFlowCard" class="status-card">
       <template #header>
         <div class="card-header">
-          <span>最近数据审核流程</span>
+          <span>
+            最近数据审核流程
+            <small v-if="reviewFlowData?.title" class="flow-data-title">：{{ reviewFlowData.title }}</small>
+          </span>
         </div>
       </template>
 
-      <el-steps :active="currentStep" align-center>
+      <el-steps
+        :active="currentStep"
+        align-center
+        finish-status="success"
+        :process-status="isReviewCompleted ? 'success' : 'process'"
+      >
         <el-step title="数据上传" description="提交原始数据" />
         <el-step title="AI检测" description="自动质量分析" />
         <el-step title="导师一审" description="初步审核" />
@@ -194,6 +202,7 @@ const store = useStore()
 const router = useRouter()
 const loading = ref(false)
 const recentData = ref([])
+const reviewFlowData = ref(null)
 const pendingTeachers = ref([])
 const teacher = ref(null)
 const stats = ref({
@@ -213,6 +222,8 @@ const welcomeMessage = computed(() => {
   return '晚上好，记得适当休息哦！'
 })
 
+const REVIEW_STEP_COUNT = 6
+
 const reviewStepMap = {
   draft: 0,
   submitted: 1,
@@ -222,19 +233,58 @@ const reviewStepMap = {
   expert_reviewing: 3,
   expert_approved: 4,
   expert_rejected: 3,
-  final_approved: 5,
-  final_rejected: 4,
-};
+
+  // 审核通过后表示 6 个节点全部完成，而不是只激活第 6 个节点
+  final_approved: REVIEW_STEP_COUNT,
+
+  // 兼容历史/异常别名，防止后端或旧数据出现 approved
+  approved: REVIEW_STEP_COUNT,
+
+  // 终审拒绝仍停留在最终审核节点，表示流程在终审处结束但未通过
+  final_rejected: 4
+}
+
+const getStepFromProgress = (progress) => {
+  const value = Number(progress)
+
+  if (!Number.isFinite(value)) return 0
+  if (value >= 100) return REVIEW_STEP_COUNT
+  if (value >= 70) return 4
+  if (value >= 40) return 3
+  if (value >= 10) return 1
+
+  return 0
+}
+
+const getReviewStep = (data) => {
+  if (!data) return 0
+
+  const status = data.review_status
+
+  if (status === 'final_approved' || status === 'approved') {
+    return REVIEW_STEP_COUNT
+  }
+
+  if (Number(data.review_progress) >= 100 && data.completed_at) {
+    return REVIEW_STEP_COUNT
+  }
+
+  return reviewStepMap[status] ?? getStepFromProgress(data.review_progress)
+}
 
 const showReviewFlowCard = computed(() => {
-  const role = user.value?.role;
-  return role !== "admin" && recentData.value.length > 0;
-});
+  const role = user.value?.role
+
+  return role !== 'admin' && !!reviewFlowData.value
+})
 
 const currentStep = computed(() => {
-  const latestStatus = recentData.value?.[0]?.review_status;
-  return reviewStepMap[latestStatus] ?? 0;
-});
+  return getReviewStep(reviewFlowData.value)
+})
+
+const isReviewCompleted = computed(() => {
+  return currentStep.value >= REVIEW_STEP_COUNT
+})
 
 const scoreColors = [
   { color: '#f56c6c', percentage: 60 },
@@ -301,14 +351,18 @@ const fetchData = async () => {
     }
 
     // 并行获取所有统计数据，减少串行等待时间
-    const [dataResponse, statsResponse, approvedRes, pendingRes] = await Promise.all([
+    const [dataResponse, flowResponse, statsResponse, approvedRes, pendingRes] = await Promise.all([
       api.get('/data/my?page=1&limit=5'),
+      api.get('/data/my?page=1&limit=1&sort=review_activity'),
       api.get('/data/my?page=1&limit=1'),
       api.get('/data/my?status=final_approved'),
       api.get('/data/my?status=submitted')
     ])
 
-    recentData.value = dataResponse.data
+    recentData.value = dataResponse.data || []
+
+    reviewFlowData.value = flowResponse.data?.[0] || recentData.value[0] || null
+
     stats.value.myData = statsResponse.pagination.total
     stats.value.approved = approvedRes.pagination.total
     stats.value.pending = pendingRes.pagination.total
@@ -384,6 +438,12 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.flow-data-title {
+  margin-left: 6px;
+  color: #909399;
+  font-weight: normal;
 }
 </style>
   

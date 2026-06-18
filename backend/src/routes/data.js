@@ -618,7 +618,7 @@ router.get('/my', authenticate, async (req, res) => {
 
     const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 10, 1), 50);
-    const { status, data_type } = req.query;
+    const { status, data_type, sort } = req.query;
     const offset = (page - 1) * limit;
 
     const userId = req.user.id;
@@ -626,7 +626,7 @@ router.get('/my', authenticate, async (req, res) => {
     let query = `SELECT id, title, description, data_type, data_format, file_size,
                         visibility, review_status, review_progress, ai_check_status, ai_check_score,
                         ai_anomaly_detected, version, citation_count, download_count,
-                        created_at, submitted_at, completed_at
+                        created_at, updated_at, submitted_at, completed_at
                  FROM data_submissions
                  WHERE submitter_id = ? AND deleted_at IS NULL`;
     let params = [userId];
@@ -641,7 +641,13 @@ router.get('/my', authenticate, async (req, res) => {
       params.push(data_type);
     }
 
-    query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
+    const orderBy =
+      sort === 'review_activity'
+        ? 'ORDER BY COALESCE(completed_at, updated_at, submitted_at, created_at) DESC, id DESC'
+        : 'ORDER BY created_at DESC, id DESC';
+
+    query += ` ${orderBy} LIMIT ? OFFSET ?`;
+
     params.push(limit, offset);
 
     const [data] = await pool.query(query, params);
