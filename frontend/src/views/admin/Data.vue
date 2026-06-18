@@ -74,10 +74,11 @@
             {{ formatDate(row.created_at) }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="150">
+        <el-table-column label="操作" width="220">
           <template #default="{ row }">
             <el-button link type="primary" @click="viewDetail(row)">查看</el-button>
             <el-button v-if="canFinalReview(row)" link type="success" @click="finalReview(row)">终审</el-button>
+            <el-button link type="danger" @click="deleteData(row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -210,6 +211,31 @@ const submitReview = async () => {
     fetchData()
   } catch (error) {
     ElMessage.error('提交失败')
+  }
+}
+
+const deleteData = async (row) => {
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除数据「${row.title}」吗？删除后该数据将从数据管理、公开数据和待审核队列中移除。`,
+      '删除确认',
+      {
+        confirmButtonText: '确定删除',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    )
+
+    await api.delete(`/data/${row.id}`)
+
+    ElMessage.success('删除成功')
+    fetchData()
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') {
+      return
+    }
+
+    ElMessage.error(error?.error || '删除失败')
   }
 }
 

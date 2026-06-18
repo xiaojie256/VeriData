@@ -1121,23 +1121,67 @@ router.post(
 // 删除数据
 router.delete('/:id', authenticate, auditLog('data', 'delete'), async (req, res) => {
   try {
-    const dataId = req.params.id;
-    const [dataList] = await pool.execute(
-      `SELECT id, submitter_id, review_status FROM data_submissions WHERE id = ? AND deleted_at IS NULL`,
-      [dataId]
+    const dataId = Number.parseInt(req.params.id, 10);
+
+    if (!Number.isFinite(dataId) || dataId <= 0) {
+      return res.status(400).json({ error: '无效的数据ID' });
+    }
+
+    const result = await withTransaction(async (connection) => {
+      const [dataList] = await connection.execute(
+        `SELECT id, submitter_id, title, review_status
+         FROM data_submissions
+         WHERE id = ? AND deleted_at IS NULL
+         FOR UPDATE`,
+        [dataId]
+      );
+
+      if (dataList.length === 0) {
+        return {
+          status: 404,
+          body: { error: '数据不存在' }
+        };
+      }
+
+      const data = dataList[0];
+      const isOwner = Number(data.submitter_id) === Number(req.user.id);
+      const isAdmin = req.user.role === 'admin';
+
+      if (!isOwner && !isAdmin) {
+        return {
+          status: 403,
+          body: { error: '无权删除该数据' }
+        };
+      }
+
+      await connection.execute(
+        `UPDATE data_submissions
+         SET deleted_at = NOW()
+         WHERE id = ? AND deleted_at IS NULL`,
+        [dataId]
+      );
+
+      await connection.execute(
+        `DELETE FROM review_records
+         WHERE data_id = ? AND status = 'pending'`,
+        [dataId]
+      );
+
+      return {
+        status: 200,
+        body: { message: '删除成功' }
+      };
+    });
+
+    if (result.status !== 200) {
+      return res.status(result.status).json(result.body);
+    }
+
+    logger.warn(
+      `数据软删除: data_id=${dataId}, operator=${req.user.id}, role=${req.user.role}`
     );
-    if (dataList.length === 0) {
-      return res.status(404).json({ error: '数据不存在' });
-    }
-    const data = dataList[0];
-    const isOwner = data.submitter_id === req.user.id;
-    const isAdmin = req.user.role === 'admin';
-    const canDeleteStatus = ['draft', 'final_rejected'].includes(data.review_status);
-    if (!isAdmin && (!isOwner || !canDeleteStatus)) {
-      return res.status(403).json({ error: '当前状态不允许删除该数据' });
-    }
-    await pool.execute(`UPDATE data_submissions SET deleted_at = NOW() WHERE id = ?`, [dataId]);
-    res.json({ message: '删除成功' });
+
+    res.json(result.body);
   } catch (error) {
     logger.error('删除数据失败:', error);
     res.status(500).json({ error: '删除数据失败' });

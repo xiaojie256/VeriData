@@ -156,7 +156,7 @@
             </el-button>
 
             <el-button
-              v-if="!isViewingStudent && canDelete(row.review_status)"
+              v-if="canShowDelete(row)"
               link
               type="danger"
               @click="deleteData(row)"
@@ -310,7 +310,9 @@ const canShowSubmit = (row) => {
     canSubmit(row.review_status)
 }
 
-const canDelete = (status) => ['draft', 'final_rejected'].includes(status)
+const canShowDelete = (row) => {
+  return !isViewingStudent.value && Boolean(row?.id)
+}
 
 const needsTeacherReview = computed(() => currentUserRole.value === 'student')
 
@@ -497,7 +499,7 @@ const confirmSubmit = async () => {
 const deleteData = async (row) => {
   try {
     await ElMessageBox.confirm(
-      `确定要删除数据「${row.title}」吗？删除后将不可恢复。`,
+      `确定要删除数据「${row.title}」吗？删除后该记录将从列表、公开数据和待审核队列中移除。`,
       '删除确认',
       {
         confirmButtonText: '确定删除',
