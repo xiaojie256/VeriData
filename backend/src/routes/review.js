@@ -300,6 +300,8 @@ router.get("/history", authenticate, authorize("teacher", "expert", "admin"), as
          r.ai_assisted,
          r.reviewer_id,
          d.title,
+         d.data_type,
+         d.data_format,
          d.review_status,
          d.ai_check_status,
          d.ai_check_score,
@@ -334,6 +336,117 @@ router.get("/history", authenticate, authorize("teacher", "expert", "admin"), as
   } catch (error) {
     logger.error("获取审核历史失败:", error);
     res.status(500).json({ error: "获取审核历史失败" });
+  }
+});
+
+// 获取单条审核历史详情
+router.get("/history/:id", authenticate, authorize("teacher", "expert", "admin"), async (req, res) => {
+  try {
+    const reviewId = Number.parseInt(req.params.id, 10);
+
+    if (!Number.isInteger(reviewId) || reviewId <= 0) {
+      return res.status(400).json({ error: "无效的审核记录ID" });
+    }
+
+    const [reviews] = await pool.query(
+      `SELECT
+         r.id,
+         r.data_id,
+         r.review_type,
+         r.status,
+         r.completeness_score,
+         r.accuracy_score,
+         r.originality_score,
+         r.methodology_score,
+         r.overall_score,
+         r.comments,
+         r.issues_found,
+         r.suggestions,
+         r.ai_assisted,
+         r.ai_analysis,
+         r.created_at,
+         r.completed_at,
+         r.is_blind_review,
+
+         d.title,
+         d.description,
+         d.data_type,
+         d.data_format,
+         d.file_size,
+         d.visibility,
+         d.review_status,
+         d.review_progress,
+         d.ai_check_status,
+         d.ai_check_score,
+         d.ai_anomaly_detected,
+         d.submitted_at,
+         d.completed_at AS data_completed_at,
+
+         CASE
+           WHEN ? = 'admin' THEN u.username
+           WHEN r.is_blind_review = 1 THEN NULL
+           ELSE u.username
+         END AS submitter_name,
+         CASE
+           WHEN ? = 'admin' THEN u.real_name
+           WHEN r.is_blind_review = 1 THEN NULL
+           ELSE u.real_name
+         END AS submitter_real_name
+       FROM review_records r
+       JOIN data_submissions d ON r.data_id = d.id
+       LEFT JOIN users u ON d.submitter_id = u.id
+       WHERE r.id = ?
+         AND r.status <> 'pending'
+         AND d.deleted_at IS NULL
+         AND (r.reviewer_id = ? OR ? = 'admin')
+       LIMIT 1`,
+      [req.user.role, req.user.role, reviewId, req.user.id, req.user.role]
+    );
+
+    if (reviews.length === 0) {
+      return res.status(404).json({ error: "审核历史不存在或无权查看" });
+    }
+
+    const review = reviews[0];
+
+    review.issues_found = safeJsonArray(review.issues_found);
+    review.ai_assisted = Boolean(review.ai_assisted);
+    review.ai_anomaly_detected = Boolean(review.ai_anomaly_detected);
+    review.submitter_hidden = !review.submitter_name && !review.submitter_real_name;
+
+    // 获取该数据的完整审核链路
+    const [chainRows] = await pool.query(
+      `SELECT
+         id,
+         data_id,
+         review_type,
+         status,
+         completeness_score,
+         accuracy_score,
+         originality_score,
+         methodology_score,
+         overall_score,
+         comments,
+         issues_found,
+         suggestions,
+         ai_assisted,
+         completed_at
+       FROM review_records
+       WHERE data_id = ?
+         AND status <> 'pending'
+       ORDER BY
+         FIELD(review_type, 'teacher', 'expert', 'admin'),
+         completed_at ASC,
+         id ASC`,
+      [review.data_id]
+    );
+
+    review.review_chain = chainRows.map(serializePriorReview);
+
+    res.json({ review });
+  } catch (error) {
+    logger.error("获取审核历史详情失败:", error);
+    res.status(500).json({ error: "获取审核历史详情失败" });
   }
 });
 
