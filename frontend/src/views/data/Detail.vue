@@ -337,7 +337,11 @@
                 {{ reviewStatusMap[record.status] || statusMap[record.status] || record.status }}
               </h4>
 
-              <p>审核人：{{ record.reviewer_display_name || '已脱敏' }}</p>
+              <p v-if="record.reviewer_display_name">审核人：{{ record.reviewer_display_name }}</p>
+              <p v-else-if="record.reviewer_identity_hidden">
+                审核人：{{ getHiddenReviewerText(record) }}
+              </p>
+              <p v-else>审核人：未记录</p>
 
               <p v-if="record.overall_score">
                 综合评分：{{ record.overall_score }}/10
@@ -598,6 +602,14 @@ const scoreColors = [
   { color: '#e6a23c', percentage: 80 },
   { color: '#67c23a', percentage: 100 }
 ]
+
+const getHiddenReviewerText = (record) => {
+  if (record.review_type === 'expert') {
+    return '专家盲审员（匿名）'
+  }
+
+  return '身份已隐藏'
+}
 
 const formatDate = (date) => date ? dayjs(date).format('YYYY-MM-DD HH:mm') : '-'
 

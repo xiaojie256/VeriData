@@ -234,7 +234,45 @@ const safeJsonArray = value => {
   return [];
 };
 
-const serializeReviewRecord = row => {
+const buildReviewerDisplayName = row => {
+  return row.reviewer_real_name || row.reviewer_username || null;
+};
+
+const shouldHideReviewerIdentity = (viewer, data, row) => {
+  const viewerRole = viewer?.role || '';
+  const isSubmitter = Number(viewer?.id) === Number(data?.submitter_id);
+
+  // 专家查看详情时保持盲审：不要暴露导师、管理员、专家身份线索。
+  if (viewerRole === 'expert') {
+    return true;
+  }
+
+  // 管理员可以看到完整审核链，便于追责和管理。
+  if (viewerRole === 'admin') {
+    return false;
+  }
+
+  // 专家盲审身份对非管理员始终隐藏。
+  if (row.review_type === 'expert') {
+    return true;
+  }
+
+  // 提交者可以看到导师一审、管理员终审审核人。
+  if (isSubmitter && ['teacher', 'admin'].includes(row.review_type)) {
+    return false;
+  }
+
+  // 导师可以看到导师审核环节的审核人。
+  if (viewerRole === 'teacher' && row.review_type === 'teacher') {
+    return false;
+  }
+
+  return true;
+};
+
+const serializeReviewRecord = (row, viewer, data) => {
+  const reviewerIdentityHidden = shouldHideReviewerIdentity(viewer, data, row);
+
   return {
     id: row.id,
     review_type: row.review_type,
@@ -251,43 +289,49 @@ const serializeReviewRecord = row => {
     ai_assisted: Boolean(row.ai_assisted),
     completed_at: row.completed_at,
     created_at: row.created_at,
-
-    // 身份脱敏：只展示审核结果，不展示审核人身份
-    reviewer_display_name: null,
-    reviewer_identity_hidden: true
+    reviewer_display_name: reviewerIdentityHidden ? null : buildReviewerDisplayName(row),
+    reviewer_identity_hidden: reviewerIdentityHidden,
+    reviewer_identity_hidden_reason: reviewerIdentityHidden
+      ? row.review_type === 'expert'
+        ? 'expert_blind_review'
+        : 'permission'
+      : null
   };
 };
 
-const getReviewChain = async (db, dataId) => {
+const getReviewChain = async (db, dataId, viewer, data) => {
   const [rows] = await db.query(
     `SELECT
-      id,
-      data_id,
-      reviewer_id,
-      review_type,
-      status,
-      completeness_score,
-      accuracy_score,
-      originality_score,
-      methodology_score,
-      overall_score,
-      comments,
-      issues_found,
-      suggestions,
-      ai_assisted,
-      completed_at,
-      created_at
-    FROM review_records
-    WHERE data_id = ?
-      AND status <> 'pending'
+      r.id,
+      r.data_id,
+      r.reviewer_id,
+      r.review_type,
+      r.status,
+      r.completeness_score,
+      r.accuracy_score,
+      r.originality_score,
+      r.methodology_score,
+      r.overall_score,
+      r.comments,
+      r.issues_found,
+      r.suggestions,
+      r.ai_assisted,
+      r.completed_at,
+      r.created_at,
+      reviewer.username AS reviewer_username,
+      reviewer.real_name AS reviewer_real_name
+    FROM review_records r
+    LEFT JOIN users reviewer ON r.reviewer_id = reviewer.id
+    WHERE r.data_id = ?
+      AND r.status <> 'pending'
     ORDER BY
-      FIELD(review_type, 'teacher', 'expert', 'admin'),
-      completed_at ASC,
-      id ASC`,
+      FIELD(r.review_type, 'teacher', 'expert', 'admin'),
+      r.completed_at ASC,
+      r.id ASC`,
     [dataId]
   );
 
-  return rows.map(serializeReviewRecord);
+  return rows.map(row => serializeReviewRecord(row, viewer, data));
 };
 
 const attachViewPermissionUsers = async (db, data, user) => {
@@ -801,7 +845,7 @@ router.get('/:id', optionalAuth, auditLog('data', 'view'), async (req, res) => {
       data.submitter_id = null;
     }
 
-    data.review_chain = await getReviewChain(pool, data.id);
+    data.review_chain = await getReviewChain(pool, data.id, req.user, data);
     data.prior_reviews = data.review_chain;
 
     await attachViewPermissionUsers(pool, data, req.user);
