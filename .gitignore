@@ -92,3 +92,6 @@ CLAUDE.md
 # 12. 本地 Docker 镜像源配置
 # ==========================================
 .env.docker.local
+
+
+AGENTS.md
