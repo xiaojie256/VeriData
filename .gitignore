@@ -9,9 +9,16 @@ Desktop.ini
 # ==========================================
 # 2. 环境变量与密钥
 # ==========================================
+# 根目录 Docker Compose 本地变量
+.env
+.env.local
+!.env.example
+!backend/.env.example
+!frontend/.env.example
 backend/.env
 backend/.env.local
 frontend/.env.local
+frontend/.env.*.local
 frontend/.env.development.local
 frontend/.env.production.local
 *.pod
@@ -68,6 +75,15 @@ mysql/data/
 # 8. 本地调试脚本
 # ==========================================
 backend/_query_check.js
+test-register.js
+vue-error-files.txt
+
+# ==========================================
+# 13. 备份文件
+# ==========================================
+*.bak
+*.backup
+*.old
 
 # ==========================================
 # 9. 上传文件
