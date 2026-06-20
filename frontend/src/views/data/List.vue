@@ -309,8 +309,9 @@ const currentUserRole = computed(() => {
 
 const canShowSubmit = (row) => {
   return !isViewingStudent.value &&
-    ['student', 'civilian'].includes(currentUserRole.value) &&
-    canSubmit(row.review_status)
+    ['student', 'civilian', 'teacher', 'admin'].includes(currentUserRole.value) &&
+    canSubmit(row.review_status) &&
+    !['pending', 'queued', 'running'].includes(row.ai_check_status)
 }
 
 const canShowDelete = (row) => {
@@ -436,9 +437,9 @@ const submitReview = async (row) => {
     console.error(e)
   }
 
-  // 2. 非学生/普通账号角色，禁止从"我的数据"走提交审核流程
-  if (!['student', 'civilian'].includes(userRole)) {
-    ElMessage.warning('当前角色不支持从"我的数据"提交审核，请联系管理员处理');
+  // 2. 不支持的角色，禁止提交审核
+  if (!['student', 'civilian', 'teacher', 'admin'].includes(userRole)) {
+    ElMessage.warning('当前角色不支持提交审核');
     return;
   }
 

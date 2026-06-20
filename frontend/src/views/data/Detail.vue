@@ -541,7 +541,7 @@
           title="当前提交者无需导师绑定"
         >
           <template #default>
-            普通账号提交后将直接进入专家审核队列；教师或管理员本人上传的数据将跳过导师一审，直接进入管理员最终审核队列。管理员查看他人数据时不能在此处代替提交者提交审核。
+            学生提交后进入导师一审；普通账号、导师、管理员本人上传的数据无需导师绑定，提交后直接进入专家审核队列。管理员查看他人数据时不能在此处代替提交者提交审核。
           </template>
         </el-alert>
       </template>
@@ -790,16 +790,43 @@ const canSubmit = computed(() => {
   )
 })
 
+const AI_REACHED_STATUSES = new Set(['running', 'queued', 'completed', 'failed', 'skipped'])
+
 const currentStep = computed(() => {
   const status = data.value?.review_status
-  if (status === 'draft') return 0
-  if (status === 'submitted') return 1
-  if (status === 'teacher_reviewing') return 2
-  if (status === 'teacher_approved') return 3
-  if (status === 'expert_reviewing') return 3
-  if (status === 'expert_approved') return 4
-  if (status === 'final_approved') return 5
-  return 1
+  const aiStatus = data.value?.ai_check_status
+
+  // 最终审核阶段
+  if (status === 'final_approved' || status === 'final_rejected') {
+    return 5
+  }
+
+  // 等待/完成最终审核
+  if (status === 'expert_approved') {
+    return 4
+  }
+
+  // 专家审核阶段
+  if (status === 'expert_reviewing' || status === 'teacher_approved' || status === 'expert_rejected') {
+    return 3
+  }
+
+  // 导师审核阶段
+  if (status === 'teacher_reviewing' || status === 'teacher_rejected') {
+    return 2
+  }
+
+  // 已提交但还没流转到具体阶段
+  if (status === 'submitted') {
+    return 2
+  }
+
+  // 仍是草稿，但 AI 已经开始或完成，就推进到 AI 检测阶段
+  if (status === 'draft' && AI_REACHED_STATUSES.has(aiStatus)) {
+    return 1
+  }
+
+  return 0
 })
 
 const aiStatusText = computed(() => {
@@ -1158,9 +1185,7 @@ const submitReview = async () => {
     ElMessage.success(
       needsTeacherReview.value
         ? '提交审核成功，已进入AI检测与导师一审环节'
-        : currentUserRole.value === 'civilian'
-          ? '提交审核成功，已进入专家审核环节'
-          : '提交审核成功，已进入管理员最终审核环节'
+        : '提交审核成功，已进入专家审核环节'
     )
 
     submitDialogVisible.value = false

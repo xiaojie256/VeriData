@@ -470,32 +470,12 @@ router.post('/upload', authenticate, authorize('student', 'teacher', 'admin', 'c
         [req.user.id, dataId]
       );
 
-      // 管理员没有导师，管理员上传的数据应直接进入专家盲审池
-      let reviewStatus = 'draft';
-      let reviewProgress = 0;
-
-      if (req.user.role === 'admin') {
-        reviewStatus = 'expert_reviewing';
-        reviewProgress = 40;
-
-        await connection.execute(
-          `UPDATE data_submissions
-           SET review_status = 'expert_reviewing',
-               review_progress = 40,
-               submitted_at = NOW()
-           WHERE id = ?`,
-          [dataId]
-        );
-
-        await createPendingExpertReviewIfNeeded(connection, dataId);
-      }
-
       return {
         dataId,
         fileHash,
         remaining: users[0].quota_total - users[0].quota_used - 1,
-        reviewStatus,
-        reviewProgress
+        reviewStatus: 'draft',
+        reviewProgress: 0
       };
     });
 
@@ -1206,7 +1186,7 @@ router.post(
         const aiStatus = data.ai_check_status || 'pending';
         const aiOverrideApproved = data.ai_manual_override_status === 'approved';
 
-        if (['pending', 'running'].includes(aiStatus)) {
+        if (['pending', 'queued', 'running'].includes(aiStatus)) {
           await connection.rollback();
 
           return res.status(400).json({
@@ -1317,53 +1297,13 @@ router.post(
         });
       }
 
-      // 普通账号：无导师，直接进入专家审核队列
-      if (req.user.role === 'civilian') {
-        await connection.execute(
-          `UPDATE data_submissions
-           SET review_status = 'expert_reviewing',
-               submitted_at = NOW(),
-               is_liability_accepted = 1,
-               review_progress = 40
-           WHERE id = ?`,
-          [dataId]
-        );
-
-        await connection.execute(
-          `INSERT INTO review_records
-           (data_id, reviewer_id, review_type, status, is_blind_review)
-           VALUES (?, NULL, 'expert', 'pending', 1)`,
-          [dataId]
-        );
-
-        await connection.execute(
-          `INSERT INTO notifications (user_id, type, title, content, related_type, related_id)
-           SELECT id, 'review', '新的专家审核任务', ?, 'data', ?
-           FROM users
-           WHERE role = 'expert'
-             AND status = 'active'
-             AND deleted_at IS NULL`,
-          [
-            `普通账号 ${req.user.real_name || req.user.username} 提交了数据《${data.title}》，请进行专家审核。${aiReviewWarning ? `\n\n${aiReviewWarning}` : ''}`,
-            dataId
-          ]
-        );
-
-        await connection.commit();
-        return res.json({
-          message: '数据已提交专家审核',
-          review_status: 'expert_reviewing',
-          review_progress: 40
-        });
-      }
-
-      // 管理员/教师：跳过导师一审，直接进入管理员最终审核队列
+      // 管理员/教师/普通账号：无导师环节，直接进入专家审核池
       await connection.execute(
         `UPDATE data_submissions
-         SET review_status = 'expert_approved',
+         SET review_status = 'expert_reviewing',
              submitted_at = NOW(),
              is_liability_accepted = 1,
-             review_progress = 70
+             review_progress = 40
          WHERE id = ?`,
         [dataId]
       );
@@ -1371,19 +1311,19 @@ router.post(
       await connection.execute(
         `INSERT INTO review_records
          (data_id, reviewer_id, review_type, status, is_blind_review)
-         VALUES (?, NULL, 'admin', 'pending', 0)`,
+         VALUES (?, NULL, 'expert', 'pending', 1)`,
         [dataId]
       );
 
       await connection.execute(
         `INSERT INTO notifications (user_id, type, title, content, related_type, related_id)
-         SELECT id, 'review', '新的最终审核任务', ?, 'data', ?
+         SELECT id, 'review', '新的专家审核任务', ?, 'data', ?
          FROM users
-         WHERE role = 'admin'
+         WHERE role = 'expert'
            AND status = 'active'
            AND deleted_at IS NULL`,
         [
-          `用户 ${req.user.real_name || req.user.username} 提交了数据《${data.title}》，请进行管理员最终审核。${aiReviewWarning ? `\n\n${aiReviewWarning}` : ''}`,
+          `用户 ${req.user.real_name || req.user.username} 提交了数据《${data.title}》，请进行专家审核。${aiReviewWarning ? `\n\n${aiReviewWarning}` : ''}`,
           dataId
         ]
       );
@@ -1391,9 +1331,9 @@ router.post(
       await connection.commit();
 
       return res.json({
-        message: '数据已提交管理员最终审核',
-        review_status: 'expert_approved',
-        review_progress: 70
+        message: '数据已提交专家审核',
+        review_status: 'expert_reviewing',
+        review_progress: 40
       });
     } catch (error) {
       try {
