@@ -9,28 +9,22 @@ Desktop.ini
 # ==========================================
 # 2. 环境变量与密钥
 # ==========================================
-
-# 根目录 Docker Compose 本地私密配置
 .env
 .env.local
 .env.*.local
-
-# 后端/前端本地私密配置
 backend/.env
 backend/.env.local
 frontend/.env.local
 frontend/.env.development.local
 frontend/.env.production.local
 
-# 允许提交示例模板
-!.env.example
-!backend/.env.example
-!frontend/.env.example
-
-# 证书、私钥
 *.pod
 *.pem
 *.key
+
+# 私钥
+.ssh_id_ed25519
+.ssh_id_ed25519.pub
 
 # ==========================================
 # 3. Node / Vue 依赖与缓存
@@ -38,7 +32,7 @@ frontend/.env.production.local
 node_modules/
 frontend/node_modules/
 backend/node_modules/
-.npm
+.npm/
 .eslintcache
 .cache/
 
@@ -54,17 +48,24 @@ build/
 # 5. 日志与运行数据
 # ==========================================
 *.log
-logs/
-backend/logs/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+logs/*
+!logs/.gitkeep
+
+backend/logs/*
+!backend/logs/.gitkeep
 
 # ==========================================
 # 6. Docker / MySQL 本地数据
 # ==========================================
 mysql/data/
 .docker-volumes/
+
+# 本地 Docker 镜像源配置
+.env.docker.local
 
 # ==========================================
 # 7. IDE / 编辑器文件
@@ -79,33 +80,35 @@ mysql/data/
 *.swp
 
 # ==========================================
-# 8. 本地调试脚本
+# 8. 本地调试脚本 / 临时排查文件
 # ==========================================
 backend/_query_check.js
 test-register.js
 vue-error-files.txt
 
 # ==========================================
-# 13. 备份文件
-# ==========================================
-*.bak
-*.backup
-*.old
-
-# ==========================================
 # 9. 上传文件
 # ==========================================
-uploads/
-backend/uploads/
-uploads/data/
-uploads/id-cards/
+uploads/*
+!uploads/.gitkeep
+!uploads/avatars/
+!uploads/data/
+!uploads/id-cards/
+
+uploads/avatars/*
+!uploads/avatars/.gitkeep
+
+uploads/data/*
+!uploads/data/.gitkeep
+
+uploads/id-cards/*
+!uploads/id-cards/.gitkeep
+
+backend/uploads/*
+!backend/uploads/.gitkeep
 
 # ==========================================
 # 10. AI 工具上下文
 # ==========================================
 CLAUDE.md
-
-# ==========================================
-# 12. 本地 Docker 镜像源配置
-# ==========================================
-.env.docker.local
+AGENTS.md
