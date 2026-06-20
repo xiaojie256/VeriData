@@ -119,6 +119,7 @@
                     <div>支持上传：CSV、Excel、JSON、TXT、PDF、Word、ZIP/RAR，最大 100MB</div>
                     <div>当前支持 AI 自动检测：CSV、Excel、JSON、制表符分隔 TXT</div>
                     <div>PDF、Word、ZIP/RAR 等文件可上传归档，但暂不参与自动 AI 检测</div>
+                    <div>CSV 文件请使用 UTF-8 或 UTF-8 BOM 编码；Excel 导出的 ANSI/GBK CSV 中文可能无法正确识别</div>
                   </div>
                 </template>
               </el-upload>

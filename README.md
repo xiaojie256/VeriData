@@ -214,6 +214,7 @@ VeriData/
 ├── logs/                       # 运行时日志目录，不应提交
 ├── docker-compose.yml          # 默认 Docker Compose 编排
 ├── docker-compose.dev.yml      # 开发环境 Docker Compose 编排
+├── .env.example                # 环境变量示例模板
 ├── start.bat                   # Windows 启动脚本
 ├── start.sh                    # Linux / macOS 启动脚本
 ├── LICENSE
@@ -288,20 +289,30 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 
 ---
 
-### 5.4 配置 Docker Compose 变量
+### 5.4 配置根目录 `.env`
 
-项目根目录可以创建 `.env` 文件，用于 Docker Compose 变量替换：
+```bash
+cp .env.example .env
+```
+
+然后打开 `.env`，至少修改以下配置：
 
 ```env
-SETTINGS_ENCRYPTION_KEY=请替换为至少32字符的随机字符串
-AI_INTERNAL_TOKEN=请替换为随机内部通信Token
-SESSION_SINGLE_LOGIN_ENABLED=true
-SESSION_TTL_SECONDS=604800
+JWT_SECRET=随机字符串
+AI_INTERNAL_TOKEN=随机字符串
+SETTINGS_ENCRYPTION_KEY=随机字符串
+```
+
+如果是首次初始化数据库，也可以修改：
+
+```env
+MYSQL_ROOT_PASSWORD=新的数据库密码
+DB_PASSWORD=新的数据库密码
 ```
 
 注意：
 
-* `.env` 不得提交到 Git。
+* `.env` 是本地私密配置文件，不要提交到 Git。
 * `AI_INTERNAL_TOKEN` 必须保证后端和 AI 服务一致。
 * `SETTINGS_ENCRYPTION_KEY` 一旦用于生产环境，不要随意更换，否则可能导致已加密的 AI API Key 无法解密。
 
@@ -411,19 +422,19 @@ docker compose logs -f
 进入 MySQL：
 
 ```bash
-docker compose exec mysql mysql --default-character-set=utf8mb4 -uroot -pVeriData@2024 veri_data
+docker compose exec mysql mysql --default-character-set=utf8mb4 -uroot -p veri_data
 ```
 
 备份数据库：
 
 ```bash
-docker compose exec mysql mysqldump --default-character-set=utf8mb4 -uroot -pVeriData@2024 veri_data > backup.sql
+docker compose exec mysql mysqldump --default-character-set=utf8mb4 -uroot -p veri_data > backup.sql
 ```
 
 恢复数据库：
 
 ```bash
-docker compose exec -T mysql mysql --default-character-set=utf8mb4 -uroot -pVeriData@2024 veri_data < backup.sql
+docker compose exec -T mysql mysql --default-character-set=utf8mb4 -uroot -p veri_data < backup.sql
 ```
 
 清理并重新初始化数据库：
@@ -727,29 +738,14 @@ mysql/init/02-data.sql
 
 ### 11.1 后端环境变量
 
-| 变量名                            | 说明                  |
-| ------------------------------ | ------------------- |
-| `DB_HOST`                      | MySQL 主机            |
-| `DB_PORT`                      | MySQL 端口            |
-| `DB_USER`                      | MySQL 用户名           |
-| `DB_PASSWORD`                  | MySQL 密码            |
-| `DB_NAME`                      | MySQL 数据库名          |
-| `REDIS_HOST`                   | Redis 主机            |
-| `REDIS_PORT`                   | Redis 端口            |
-| `JWT_SECRET`                   | JWT 签名密钥            |
-| `JWT_EXPIRES_IN`               | JWT 有效期             |
-| `SESSION_SINGLE_LOGIN_ENABLED` | 是否启用单账号单处登录         |
-| `SESSION_TTL_SECONDS`          | 服务端会话有效期            |
-| `SETTINGS_ENCRYPTION_KEY`      | 系统敏感配置加密密钥          |
-| `AI_SERVICE_URL`               | AI 服务地址             |
-| `AI_INTERNAL_TOKEN`            | 后端与 AI 服务内部通信 Token |
-| `UPLOAD_PATH`                  | 上传文件目录              |
-| `MAX_FILE_SIZE`                | 最大上传文件大小            |
-| `CORS_ORIGIN`                  | 跨域白名单               |
-| `SMTP_HOST`                    | 邮件服务器               |
-| `SMTP_PORT`                    | 邮件端口                |
-| `SMTP_USER`                    | 邮箱账号                |
-| `SMTP_PASS`                    | 邮箱授权码               |
+| 变量名 | 示例值 | 说明 |
+|--------|--------|------|
+| `MYSQL_ROOT_PASSWORD` | 请在 `.env` 中设置 | MySQL root 密码 |
+| `DB_PASSWORD` | 请在 `.env` 中设置 | 后端连接 MySQL 的密码 |
+| `JWT_SECRET` | 请在 `.env` 中设置 | JWT 登录令牌签名密钥 |
+| `AI_INTERNAL_TOKEN` | 请在 `.env` 中设置 | 后端调用 AI 服务的内部令牌，后端和 AI 服务必须一致 |
+| `SETTINGS_ENCRYPTION_KEY` | 请在 `.env` 中设置 | 用于加密数据库中的 AI API Key |
+| `AI_SERVICE_URL` | `http://ai-service:5000` | Docker 内部 AI 服务地址 |
 
 ### 11.2 AI 服务环境变量
 

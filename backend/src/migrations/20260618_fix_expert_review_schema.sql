@@ -23,22 +23,22 @@ ALTER TABLE review_records
   ) NOT NULL DEFAULT 'pending';
 
 ALTER TABLE review_records
-  MODIFY COLUMN reviewer_id BIGINT UNSIGNED DEFAULT NULL COMMENT '审核人ID；NULL表示未分配到具体审核人的专家/管理员审核池';
+  MODIFY COLUMN reviewer_id BIGINT UNSIGNED DEFAULT NULL;
 
 ALTER TABLE review_records
-  ADD COLUMN IF NOT EXISTS ai_assisted TINYINT(1) DEFAULT 0 COMMENT '是否使用AI辅助';
+  ADD COLUMN ai_assisted TINYINT(1) DEFAULT 0;
 
 ALTER TABLE review_records
-  ADD COLUMN IF NOT EXISTS ai_analysis TEXT COMMENT 'AI分析结果';
+  ADD COLUMN ai_analysis TEXT;
 
 ALTER TABLE review_records
-  ADD COLUMN IF NOT EXISTS issues_found JSON DEFAULT NULL COMMENT '发现的问题';
+  ADD COLUMN issues_found JSON DEFAULT NULL;
 
 ALTER TABLE review_records
-  ADD COLUMN IF NOT EXISTS suggestions TEXT COMMENT '改进建议';
+  ADD COLUMN suggestions TEXT;
 
 ALTER TABLE review_records
-  ADD COLUMN IF NOT EXISTS completed_at DATETIME DEFAULT NULL COMMENT '完成时间';
+  ADD COLUMN completed_at DATETIME DEFAULT NULL;
 
 ALTER TABLE data_submissions
-  ADD COLUMN IF NOT EXISTS review_progress INT DEFAULT 0 COMMENT '审核进度百分比';
+  ADD COLUMN review_progress INT DEFAULT 0;

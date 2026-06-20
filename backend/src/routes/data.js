@@ -165,6 +165,28 @@ const REVIEW_TYPE_LABELS = {
   admin: '管理员终审'
 };
 
+/**
+ * 将无需导师审核的数据直接送入专家盲审池。
+ * 当前仅用于管理员上传数据：
+ * - 管理员没有导师
+ * - 专家待审核列表依赖 review_records 中的 expert pending 记录
+ * - reviewer_id = NULL 表示进入专家公共审核池
+ */
+const createPendingExpertReviewIfNeeded = async (connection, dataId) => {
+  await connection.execute(
+    `INSERT INTO review_records (data_id, reviewer_id, review_type, status, is_blind_review)
+     SELECT ?, NULL, 'expert', 'pending', 1
+     WHERE NOT EXISTS (
+       SELECT 1
+       FROM review_records
+       WHERE data_id = ?
+         AND review_type = 'expert'
+         AND status = 'pending'
+     )`,
+    [dataId, dataId]
+  );
+};
+
 const safeJsonArray = value => {
   if (!value) return [];
 
@@ -439,14 +461,42 @@ router.post('/upload', authenticate, authorize('student', 'teacher', 'admin', 'c
         ]
       );
 
+      const dataId = insertResult.insertId;
+
       await connection.execute('UPDATE users SET quota_used = quota_used + 1 WHERE id = ?', [req.user.id]);
 
       await connection.execute(
         'INSERT INTO quota_usage_logs (user_id, action_type, quota_consumed, data_id) VALUES (?, "data_submit", 1, ?)',
-        [req.user.id, insertResult.insertId]
+        [req.user.id, dataId]
       );
 
-      return { dataId: insertResult.insertId, fileHash, remaining: users[0].quota_total - users[0].quota_used - 1 };
+      // 管理员没有导师，管理员上传的数据应直接进入专家盲审池
+      let reviewStatus = 'draft';
+      let reviewProgress = 0;
+
+      if (req.user.role === 'admin') {
+        reviewStatus = 'expert_reviewing';
+        reviewProgress = 40;
+
+        await connection.execute(
+          `UPDATE data_submissions
+           SET review_status = 'expert_reviewing',
+               review_progress = 40,
+               submitted_at = NOW()
+           WHERE id = ?`,
+          [dataId]
+        );
+
+        await createPendingExpertReviewIfNeeded(connection, dataId);
+      }
+
+      return {
+        dataId,
+        fileHash,
+        remaining: users[0].quota_total - users[0].quota_used - 1,
+        reviewStatus,
+        reviewProgress
+      };
     });
 
     logger.info(`数据上传成功: ID=${resultData.dataId}, User=${req.user.username}`);
@@ -455,7 +505,9 @@ router.post('/upload', authenticate, authorize('student', 'teacher', 'admin', 'c
       message: '上传成功',
       data_id: resultData.dataId,
       file_hash: resultData.fileHash,
-      quota_remaining: resultData.remaining
+      quota_remaining: resultData.remaining,
+      review_status: resultData.reviewStatus,
+      review_progress: resultData.reviewProgress
     });
   } catch (error) {
     if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);

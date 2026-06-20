@@ -169,7 +169,11 @@ class DataAnalyzer:
             ext = os.path.splitext(file_path)[1].lower()
             
             if ext == '.csv':
-                return pd.read_csv(file_path)
+                # 尝试 UTF-8 读取，失败则降级到 GB18030
+                try:
+                    return pd.read_csv(file_path, encoding='utf-8')
+                except UnicodeDecodeError:
+                    return pd.read_csv(file_path, encoding='gb18030')
             elif ext in ['.xlsx', '.xls']:
                 return pd.read_excel(file_path)
             elif ext == '.json':

@@ -9,18 +9,25 @@ Desktop.ini
 # ==========================================
 # 2. 环境变量与密钥
 # ==========================================
-# 根目录 Docker Compose 本地变量
+
+# 根目录 Docker Compose 本地私密配置
 .env
 .env.local
-!.env.example
-!backend/.env.example
-!frontend/.env.example
+.env.*.local
+
+# 后端/前端本地私密配置
 backend/.env
 backend/.env.local
 frontend/.env.local
-frontend/.env.*.local
 frontend/.env.development.local
 frontend/.env.production.local
+
+# 允许提交示例模板
+!.env.example
+!backend/.env.example
+!frontend/.env.example
+
+# 证书、私钥
 *.pod
 *.pem
 *.key
@@ -99,15 +106,6 @@ uploads/id-cards/
 CLAUDE.md
 
 # ==========================================
-# 11. 私钥
-# ==========================================
-.ssh_id_ed25519
-.ssh_id_ed25519.pub
-
-# ==========================================
 # 12. 本地 Docker 镜像源配置
 # ==========================================
 .env.docker.local
-
-
-AGENTS.md

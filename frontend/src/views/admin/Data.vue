@@ -39,7 +39,41 @@
     <el-card>
       <el-table :data="dataList" v-loading="loading" style="width: 100%">
         <el-table-column prop="title" label="标题" min-width="200" />
-        <el-table-column prop="submitter_name" label="提交者" min-width="120" />
+        <el-table-column
+          prop="original_filename"
+          label="原始文件名"
+          min-width="180"
+          show-overflow-tooltip
+        />
+        <el-table-column
+          prop="description"
+          label="描述"
+          min-width="220"
+          show-overflow-tooltip
+        />
+        <el-table-column
+          prop="data_format"
+          label="格式"
+          width="90"
+        />
+        <el-table-column
+          prop="visibility"
+          label="可见性"
+          width="100"
+        />
+        <el-table-column label="提交者" min-width="160" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span>
+              {{ row.submitter_real_name || row.submitter_name || '-' }}
+            </span>
+            <span
+              v-if="row.submitter_real_name && row.submitter_name"
+              class="muted-text"
+            >
+              （{{ row.submitter_name }}）
+            </span>
+          </template>
+        </el-table-column>
         <el-table-column prop="data_type" label="类型" width="100">
           <template #default="{ row }">
             <el-tag size="small">{{ getDataTypeLabel(row.data_type) }}</el-tag>
@@ -258,5 +292,9 @@ onMounted(() => {
   margin-top: 20px;
   display: flex;
   justify-content: flex-end;
+}
+.muted-text {
+  color: #909399;
+  font-size: 12px;
 }
 </style>

@@ -1,14 +1,17 @@
-﻿services:
+services:
   # MySQL数据库
   mysql:
     image: ${MYSQL_IMAGE:-mysql:8.0}
     container_name: veri-data-mysql
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: VeriData@2024
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?请在根目录 .env 中设置 MYSQL_ROOT_PASSWORD}
       MYSQL_DATABASE: veri_data
       TZ: Asia/Shanghai
-    command: --default-time-zone=+08:00
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-time-zone=+08:00
     ports:
       - "3306:3306"
     volumes:
@@ -49,17 +52,17 @@
       DB_HOST: mysql
       DB_PORT: 3306
       DB_USER: root
-      DB_PASSWORD: VeriData@2024
+      DB_PASSWORD: ${DB_PASSWORD:?请在根目录 .env 中设置 DB_PASSWORD}
       DB_NAME: veri_data
       REDIS_HOST: redis
       REDIS_PORT: 6379
-      JWT_SECRET: VeriData_JWT_Secret_Key_2024_Secure
+      JWT_SECRET: ${JWT_SECRET:?请在根目录 .env 中设置 JWT_SECRET}
       JWT_EXPIRES_IN: 7d
       SESSION_SINGLE_LOGIN_ENABLED: ${SESSION_SINGLE_LOGIN_ENABLED:-true}
       SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-604800}
       SETTINGS_ENCRYPTION_KEY: ${SETTINGS_ENCRYPTION_KEY:-}
       AI_SERVICE_URL: http://ai-service:5000
-      AI_INTERNAL_TOKEN: ${AI_INTERNAL_TOKEN:-VeriData_Internal_AI_Token_2024_Dev_Only}
+      AI_INTERNAL_TOKEN: ${AI_INTERNAL_TOKEN:?请在根目录 .env 中设置 AI_INTERNAL_TOKEN}
       UPLOAD_PATH: /app/uploads
     ports:
       - "3000:3000"
@@ -87,7 +90,7 @@
       FLASK_ENV: production
       MODEL_PATH: /app/models
       UPLOAD_ROOT: /app/uploads
-      AI_INTERNAL_TOKEN: ${AI_INTERNAL_TOKEN:-VeriData_Internal_AI_Token_2024_Dev_Only}
+      AI_INTERNAL_TOKEN: ${AI_INTERNAL_TOKEN:?请在根目录 .env 中设置 AI_INTERNAL_TOKEN}
     # 注意：不要把 AI 服务暴露给宿主机。
     # 后端通过 Docker 内部网络访问 http://ai-service:5000。
     # ports:

@@ -1,4 +1,4 @@
-﻿const mysql = require('mysql2/promise');
+const mysql = require('mysql2/promise');
 
 const normalizeDbTimezone = (value) => {
   const timezone = String(value || '').trim();
@@ -22,6 +22,8 @@ const pool = mysql.createPool({
   timezone: dbTimezone,
   dateStrings: true,
 
+  charset: 'utf8mb4',
+
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
@@ -31,6 +33,7 @@ const pool = mysql.createPool({
 
 if (pool.pool && typeof pool.pool.on === 'function') {
   pool.pool.on('connection', (connection) => {
+    connection.query("SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci");
     connection.query("SET time_zone = '" + dbTimezone + "'");
   });
 }
