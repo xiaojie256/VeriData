@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="page-container">
     <div class="page-header">
       <h2 class="page-title">
@@ -263,7 +263,10 @@ const submitForm = reactive({
   liability_accepted: false
 })
 
-const formatDate = (date) => dayjs(date).format('YYYY-MM-DD HH:mm')
+const formatDate = (date) => {
+  if (!date) return '-'
+  return dayjs(date).format('YYYY-MM-DD HH:mm')
+}
 
 const getScoreType = (score) => {
   if (score >= 80) return 'success'

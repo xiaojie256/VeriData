@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="page-container">
     <div class="page-header">
       <h2 class="page-title">数据管理</h2>
@@ -160,6 +160,11 @@ const getScoreType = (score) => {
 }
 
 const canFinalReview = (row) => row.review_status === 'expert_approved'
+
+const formatDate = (date) => {
+  if (!date) return '-'
+  return dayjs(date).format('YYYY-MM-DD HH:mm')
+}
 
 const fetchData = async () => {
   loading.value = true

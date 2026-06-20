@@ -1,4 +1,4 @@
-services:
+﻿services:
   # MySQL数据库
   mysql:
     image: ${MYSQL_IMAGE:-mysql:8.0}
@@ -8,6 +8,7 @@ services:
       MYSQL_ROOT_PASSWORD: VeriData@2024
       MYSQL_DATABASE: veri_data
       TZ: Asia/Shanghai
+    command: --default-time-zone=+08:00
     ports:
       - "3306:3306"
     volumes:
@@ -43,6 +44,8 @@ services:
 
     environment:
       NODE_ENV: development
+      TZ: Asia/Shanghai
+      DB_TIMEZONE: "+08:00"
       DB_HOST: mysql
       DB_PORT: 3306
       DB_USER: root
@@ -80,6 +83,7 @@ services:
     container_name: veri-data-ai
     restart: unless-stopped
     environment:
+      TZ: Asia/Shanghai
       FLASK_ENV: production
       MODEL_PATH: /app/models
       UPLOAD_ROOT: /app/uploads
