@@ -157,7 +157,7 @@ router.get("/users", authenticate, authorize("admin"), async (req, res) => {
   }
 });
 
-// 审核用户（验证身份）
+// 审核用户（账号状态审核）
 router.post(
   "/users/:id/verify",
   authenticate,
@@ -219,13 +219,21 @@ router.post(
         });
       }
 
+      const rolesNeedIdVerified = ["student", "teacher", "expert", "admin"];
+      const requiresIdVerified = rolesNeedIdVerified.includes(user.role);
       const hasIdCard = Boolean(user.id_card_front && user.id_card_back);
 
       const updateFields = ["status = ?"];
       const updateParams = [targetStatus];
 
-      if (targetStatus === "active" && hasIdCard) {
-        updateFields.push("id_verified = 1");
+      if (targetStatus === "active") {
+        if (requiresIdVerified && hasIdCard) {
+          updateFields.push("id_verified = 1");
+        }
+
+        if (!requiresIdVerified) {
+          updateFields.push("id_verified = 0");
+        }
       }
 
       if (targetStatus === "inactive") {
@@ -239,20 +247,23 @@ router.post(
 
       const noticeMap = {
         active: {
-          title: "身份验证通过",
-          content: "您的身份验证已通过，可以正常使用系统功能。"
+          title: "账号审核通过",
+          content:
+            user.role === "civilian"
+              ? "您的普通用户账号审核已通过，可以正常使用普通用户功能。"
+              : "您的账号审核已通过，可以正常使用对应角色功能。"
         },
         inactive: {
-          title: "身份验证未通过",
-          content: `您的身份验证未通过。${reason ? `原因：${reason}` : "请检查资料后重新提交。"}`
+          title: "账号审核未通过",
+          content: `您的账号审核未通过。${reason ? `原因：${reason}` : "请检查资料后重新提交。"}`
         },
         suspended: {
           title: "账号已被封禁",
           content: `您的账号已被封禁。${reason ? `原因：${reason}` : "如有疑问请联系管理员。"}`
         },
         pending_verification: {
-          title: "身份验证状态已重置",
-          content: "您的身份验证状态已重置为待审核。"
+          title: "账号审核状态已重置",
+          content: "您的账号审核状态已重置为待审核。"
         }
       };
 
@@ -278,7 +289,12 @@ router.post(
       res.json({
         message: messageMap[targetStatus],
         status: targetStatus,
-        id_verified: targetStatus === "active" && hasIdCard ? 1 : targetStatus === "inactive" ? 0 : user.id_verified
+        id_verified:
+          targetStatus === "active"
+            ? (requiresIdVerified && hasIdCard ? 1 : 0)
+            : targetStatus === "inactive"
+              ? 0
+              : user.id_verified
       });
     } catch (error) {
       logger.error("用户身份审核失败:", error);
@@ -298,11 +314,18 @@ router.post(
       const { id_verified } = req.body; // true/false
 
       const [users] = await pool.execute(
-        "SELECT id FROM users WHERE id = ?",
+        "SELECT id, role FROM users WHERE id = ? AND deleted_at IS NULL",
         [userId],
       );
+
       if (users.length === 0) {
         return res.status(404).json({ error: "用户不存在" });
+      }
+
+      if (users[0].role === "civilian") {
+        return res.status(400).json({
+          error: "普通用户不需要身份验证，请通过账号审核状态控制其业务权限"
+        });
       }
 
       await pool.execute("UPDATE users SET id_verified = ? WHERE id = ?", [

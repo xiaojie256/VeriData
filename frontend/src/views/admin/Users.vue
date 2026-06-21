@@ -34,7 +34,7 @@
             @clear="handleFilterChange"
           >
             <el-option label="正常" value="active" />
-            <el-option label="待验证" value="pending_verification" />
+            <el-option label="待审核" value="pending_verification" />
             <el-option label="已驳回" value="rejected" />
             <el-option label="已封禁" value="suspended" />
             <el-option label="未激活" value="inactive" />
@@ -89,10 +89,17 @@
           </template>
         </el-table-column>
 
-        <el-table-column prop="id_verified" label="身份验证" width="100">
+        <el-table-column prop="id_verified" label="身份验证" width="120">
           <template #default="{ row }">
-            <el-tag v-if="row.id_verified" type="success" size="small">已验证</el-tag>
-            <el-tag v-else type="info" size="small">未验证</el-tag>
+            <el-tag v-if="row.role === 'civilian'" type="info" size="small">
+              无需验证
+            </el-tag>
+            <el-tag v-else-if="row.id_verified" type="success" size="small">
+              已验证
+            </el-tag>
+            <el-tag v-else type="warning" size="small">
+              未验证
+            </el-tag>
           </template>
         </el-table-column>
 
@@ -125,7 +132,7 @@
             </el-button>
 
             <el-button
-              v-if="row.status === 'active' && !row.id_verified"
+              v-if="row.role !== 'civilian' && row.status === 'active' && !row.id_verified"
               link
               type="warning"
               @click="toggleIdVerified(row, true)"
@@ -134,7 +141,7 @@
             </el-button>
 
             <el-button
-              v-if="row.status === 'active' && row.id_verified"
+              v-if="row.role !== 'civilian' && row.status === 'active' && row.id_verified"
               link
               type="info"
               @click="toggleIdVerified(row, false)"
@@ -265,10 +272,10 @@ const roleType = {
 
 const statusMap = {
   active: '正常',
-  pending_verification: '待验证',
+  pending_verification: '待审核',
   rejected: '已驳回',
   suspended: '已封禁',
-  inactive: '未激活'
+  inactive: '审核未通过'
 }
 
 const statusType = {

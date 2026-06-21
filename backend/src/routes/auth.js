@@ -211,7 +211,7 @@ router.post('/register', [
         real_name || null,
         role,
         phone || null,
-        role === 'civilian' ? 'active' : 'pending_verification',
+        'pending_verification',
         role === 'civilian' ? 5 : 10
       ]
     );
@@ -240,7 +240,7 @@ router.post('/register', [
     res.status(201).json(ApiResponse.success({
       token,
       user: UserDTO.toResponse(newUser)
-    }, '注册成功'));
+    }, '注册成功，请等待管理员审核通过后再使用业务功能'));
 
   } catch (error) {
     if (error.code === 'ER_DUP_ENTRY') {

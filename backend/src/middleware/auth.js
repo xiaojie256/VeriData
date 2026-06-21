@@ -89,7 +89,7 @@ const authorize = (...roles) => {
       return res.status(403).json({ error: "账号正在审核中，暂无权操作业务" });
     }
 
-    // 学生、教师、专家、管理员等业务角色要求完成身份认证；普通公众用户不强制要求
+    // 强身份角色要求完成身份认证；普通用户只要求账号审核通过，不要求身份认证
     const rolesNeedIdVerified = ["student", "teacher", "expert", "admin"];
     if (rolesNeedIdVerified.includes(req.user.role) && req.user.id_verified !== 1) {
       return res.status(403).json({ error: "账号身份尚未认证，暂无权操作业务" });

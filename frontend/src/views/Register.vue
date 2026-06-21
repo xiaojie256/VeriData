@@ -3,7 +3,7 @@
     <div class="register-box">
       <div class="register-header">
         <h1>注册账号</h1>
-        <p>加入鉴真数据平台</p>
+        <p>注册后需等待管理员审核，通过后即可使用对应功能</p>
       </div>
 
       <el-form
@@ -211,7 +211,7 @@ const handleRegister = async () => {
 
     await store.dispatch('register', registerData)
 
-    ElMessage.success('注册成功')
+    ElMessage.success('注册成功，请等待管理员审核通过后再使用业务功能')
     router.push('/dashboard')
   } catch (error) {
     ElMessage.error(getErrorMessage(error, '注册失败'))
